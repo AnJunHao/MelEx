@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from exmel.adt import _PianoMidi, PianoMidi, MelEvent
 
 class PianoMidiComparativeBenchmark:
-    """Benchmark class for comparing PianoMidi vs OptimizedPianoMidi performance."""
+    """Benchmark class for comparing PianoMidi (_PianoMidi) vs OptimizedPianoMidi (PianoMidi) performance."""
     
     def __init__(self):
         self.data_sizes = [100, 1000, 1_0000, 10_0000, 100_0000, 1000_0000]
@@ -134,7 +134,7 @@ class PianoMidiComparativeBenchmark:
         
         return times
     
-    def run_comparative_benchmarks(self, num_queries: int = 1000, num_runs: int = 5):
+    def run_comparative_benchmarks(self, num_queries: int = 1000, num_runs: int = 3):
         """
         Run comprehensive comparative benchmarks for both implementations.
         
@@ -394,7 +394,7 @@ def main():
     benchmark = PianoMidiComparativeBenchmark()
     
     # Run comparative benchmarks
-    benchmark.run_comparative_benchmarks(num_queries=1000, num_runs=3)
+    benchmark.run_comparative_benchmarks(num_queries=1000, num_runs=10)
     
     # Print summary
     benchmark.print_comparative_summary()

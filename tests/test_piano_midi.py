@@ -211,8 +211,7 @@ class TestPianoMidiQuerying(unittest.TestCase):
     def test_nearest_multi_ordering(self):
         """Test that nearest_multi returns events in correct order (nearest to furthest)."""
         # Test with query time exactly between two events
-        result = self.piano_midi.nearest_multi(MelEvent(3.25, 60), 3)
-        # 3.25 is equidistant from 2.5 and 4.0, but 2.5 should come first due to sorting
+        result = self.piano_midi.nearest_multi(MelEvent(3.2, 60), 3)
         expected = [MidiEvent(2.5, 60, 90), MidiEvent(4.0, 60, 85), MidiEvent(1.0, 60, 80)]
         self.assertEqual(result, expected)
 

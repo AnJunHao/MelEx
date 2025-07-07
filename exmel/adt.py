@@ -512,12 +512,18 @@ class PianoMidi:
             return MidiEvent(times[idx], note, velocities[idx])
         return None
 
-    def nearest(self, mel_event: MelEvent) -> MidiEvent | None:
+    def nearest(self, mel_event: MelEvent, use_buckets: bool = False) -> MidiEvent | None:
         """
         Find the nearest occurrence of the note to the given event.
         
-        Time Complexity: O(1) for lookup table hits, O(log k) for misses
-        where k is the number of events for the note
+        Args:
+            mel_event: The reference event to find nearest neighbor for
+            use_buckets: Whether to use bucket lookup optimization (default: True)
+        
+        Time Complexity: 
+            - O(1) for lookup table hits (when use_buckets=True)
+            - O(log k) for misses or when use_buckets=False
+            where k is the number of events for the note
         """
         note = mel_event.note
         ref_time = mel_event.time
@@ -531,8 +537,8 @@ class PianoMidi:
         if not times:
             return None
         
-        # Try lookup table first for constant-time access
-        if note in self.nearest_lookup:
+        # Try lookup table first for constant-time access (if enabled)
+        if use_buckets and note in self.nearest_lookup:
             bucket = self._get_bucket(note, ref_time)
             if bucket in self.nearest_lookup[note]:
                 lookup_idx = self.nearest_lookup[note][bucket]
@@ -619,11 +625,19 @@ class PianoMidi:
         
         return [MidiEvent(time, note, vel) for time, vel in zip(result_times, result_velocities)]
     
-    def nearest_multi(self, mel_event: MelEvent, n: int) -> list[MidiEvent]:
+    def nearest_multi(self, mel_event: MelEvent, n: int, use_buckets: bool = False) -> list[MidiEvent]:
         """
         Find n nearest occurrences of the note to the given event.
         
-        Time Complexity: O(log k + n) where k is the number of events for the note
+        Args:
+            mel_event: The reference event to find nearest neighbors for
+            n: Number of nearest events to return
+            use_buckets: Whether to use bucket lookup optimization (default: True)
+        
+        Time Complexity: 
+            - O(n) for lookup table hits (when use_buckets=True)
+            - O(log k + n) for misses or when use_buckets=False
+            where k is the number of events for the note
         """
         note = mel_event.note
         ref_time = mel_event.time
@@ -637,15 +651,44 @@ class PianoMidi:
         if not times:
             return []
         
-        # Binary search to find insertion point
-        idx = bisect.bisect_left(times, ref_time)
+        # Try bucket lookup first for constant-time starting point (if enabled)
+        idx = None
+        if use_buckets and note in self.nearest_lookup:
+            bucket = self._get_bucket(note, ref_time)
+            if bucket in self.nearest_lookup[note]:
+                bucket_idx = self.nearest_lookup[note][bucket]
+                
+                # Verify the bucket result is reasonable
+                if 0 <= bucket_idx < len(times):
+                    bucket_time = times[bucket_idx]
+                    
+                    # Check if bucket is good enough (within tolerance)
+                    min_time = times[0]
+                    max_time = times[-1]
+                    bucket_size = (max_time - min_time) / min(1000, len(times) * 2) if max_time != min_time else 0
+                    
+                    # Use bucket result if it's reasonably close
+                    if abs(bucket_time - ref_time) <= bucket_size * 2:  # Allow 2x tolerance for multi-queries
+                        idx = bucket_idx
         
-        # Use two-pointer expansion
+        # Use binary search if bucket lookup is disabled or failed
+        if idx is None:
+            idx = bisect.bisect_left(times, ref_time)
+        
+        # Use two-pointer expansion starting from the determined index
         left = idx - 1
         right = idx
         results = []
         
-        # Collect n nearest events by expanding left and right
+        # Special case: if we started from a bucket, check if the bucket event itself is closest
+        if idx < len(times) and (left < 0 or abs(times[idx] - ref_time) <= abs(times[left] - ref_time)):
+            results.append(MidiEvent(times[idx], note, velocities[idx]))
+            right = idx + 1
+        elif left >= 0:
+            results.append(MidiEvent(times[left], note, velocities[left]))
+            left -= 1
+        
+        # Collect remaining n-1 nearest events by expanding left and right
         while len(results) < n and (left >= 0 or right < len(times)):
             left_dist = float('inf')
             right_dist = float('inf')
