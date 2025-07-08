@@ -1,41 +1,120 @@
 from functools import cached_property
 from pathlib import Path
 import bisect
+from typing import overload
 import mido
 from dataclasses import dataclass
 from warnings import deprecated
+from functools import cache
+from typing import Literal
 
-@dataclass(frozen=True)
+@cache
+def midi_to_note_name(midi_note):
+    note_names = 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
+    note_index = midi_note % 12
+    octave = (midi_note // 12) - 1
+    return f"{note_names[note_index]}{octave}"
+
+@cache
+def note_name_to_midi(note_name: str) -> int:
+    note_names = 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
+    note_index = note_names.index(note_name[:-1])
+    octave = int(note_name[-1])
+    return note_index + 12 * (octave + 1)
+
+@dataclass(frozen=True, slots=True)
 class MelEvent:
     time: float  # Time in seconds
     note: int    # MIDI note number (0-127)
 
+    @property
+    def note_name(self) -> str:
+        return midi_to_note_name(self.note)
+
     def __sub__(self, other: 'MelEvent') -> 'MelEvent':
-        return MelEvent(self.time - other.time, self.note - other.note)
+        # "a - b": time and note shift
+        if isinstance(other, MelEvent):
+            return MelEvent(self.time - other.time, self.note - other.note)
+        return NotImplemented
     
     def __add__(self, other: 'MelEvent') -> 'MelEvent':
-        return MelEvent(self.time + other.time, self.note + other.note)
+        # "a + b": time and note shift
+        if isinstance(other, MelEvent):
+            return MelEvent(self.time + other.time, self.note + other.note)
+        return NotImplemented
 
-    def __div__(self, other: 'MelEvent') -> float:
-        return self.time / other.time
+    def __rshift__(self, other: float) -> 'MelEvent':
+        # "a >> float": time shift
+        if isinstance(other, float):
+            return MelEvent(self.time + other, self.note)
+        return NotImplemented
+
+    def __lshift__(self, other: float) -> 'MelEvent':
+        # "a << float": time shift
+        if isinstance(other, float):
+            return MelEvent(self.time - other, self.note)
+        return NotImplemented
+
+    def __xor__(self, other: int) -> 'MelEvent':
+        # "a ^ int": note shift
+        if isinstance(other, int):
+            return MelEvent(self.time, self.note + other)
+        return NotImplemented
+
+    def __truediv__(self, other: 'MelEvent') -> float:
+        # "a / b": time ratio
+        if isinstance(other, MelEvent):
+            return self.time / other.time
+        return NotImplemented
     
     def __mul__(self, other: float) -> 'MelEvent':
-        return MelEvent(self.time * other, self.note)
+        # "a * float": time scale
+        if isinstance(other, float):
+            return MelEvent(self.time * other, self.note)
+        return NotImplemented
 
-@dataclass(frozen=True)
+    def __repr__(self) -> str:
+        # Convert note to note name
+        return f"MelEvent_(time={self.time:.1f}, note='{self.note_name}')"
+
+def MelEvent_(time: float, note: int | str) -> MelEvent:
+    if isinstance(note, str):
+        note = note_name_to_midi(note)
+    return MelEvent(time, note)
+
+@dataclass(frozen=True, slots=True)
 class MidiEvent(MelEvent):
     time: float  # Time in seconds
     note: int    # MIDI note number (0-127)
     velocity: int  # Velocity (0-127)
 
+    def __repr__(self) -> str:
+        return f"MidiEvent_(time={self.time:.1f}, note='{self.note_name}', velocity={self.velocity})"
+
+def MidiEvent_(time: float, note: int | str, velocity: int) -> MidiEvent:
+    if isinstance(note, str):
+        note = note_name_to_midi(note)
+    return MidiEvent(time, note, velocity)
+
 class Melody:
-    def __init__(self, midi_file: Path) -> None:
+
+    def __init__(self,
+                source: "Path | Melody | list[MelEvent] | list[MidiEvent]") -> None:
         """
         Initialize the melody with a MIDI file.
         """
-        self.events: tuple[MelEvent] = tuple()
-        self._load_midi(midi_file)
-        self.index_map: dict[MelEvent, int] = {event: i for i, event in enumerate(self.events)}
+        if isinstance(source, Path):
+            self.events: list[MelEvent] = []
+            self._load_midi(source)
+        elif isinstance(source, Melody):
+            self.events = source.events
+        elif isinstance(source, list):
+            self.events = [MelEvent(event.time, event.note) for event in source]
+        else:
+            raise TypeError(f"Invalid source type: {type(source)}")
+
+        self.event_to_index = {event: i for i, event in enumerate(self.events)}
+        self.time_to_index = {event.time: i for i, event in enumerate(self.events)}
     
     def _load_midi(self, midi_file: Path) -> None:
         """
@@ -64,20 +143,66 @@ class Melody:
                     events.append(MelEvent(time_seconds, msg.note))
         
         events.sort(key=lambda x: x.time)
-        self.events = tuple(events)
+        self.events = events
+
+    def __xor__(self, shift: int) -> "Melody":
+        """
+        Shift the melody by a number of semitones.
+        """
+        if isinstance(shift, int):
+            return Melody([event ^ shift for event in self.events])
+        return NotImplemented
+    
+    def __lshift__(self, time_shift: float) -> "Melody":
+        """
+        Shift the melody by a number of seconds.
+        """
+        if isinstance(time_shift, float):
+            return Melody([event << time_shift for event in self.events])
+        return NotImplemented
+    
+    def __rshift__(self, time_shift: float) -> "Melody":
+        """
+        Shift the melody by a number of seconds.
+        """
+        if isinstance(time_shift, float):
+            return Melody([event >> time_shift for event in self.events])
+        return NotImplemented
 
     def __repr__(self) -> str:
-        return self.events.__repr__()
+        if len(self.events) <= 2:
+            return f"Melody([{self.events.__repr__()}])"
+        elif len(self.events) <= 50:
+            # New line for each event
+            return f"Melody([{',\n'.join([event.__repr__() for event in self.events])}])"
+        else:
+            return f"Melody([{self.events[0]}, ...({len(self.events) - 2} events)..., {self.events[-1]}])"
 
     def __len__(self) -> int:
         return len(self.events)
 
-    def __getitem__(self, index: int) -> MelEvent:
-        return self.events[index]
+    @overload
+    def __getitem__(self, key: int) -> MelEvent: ...
+    @overload
+    def __getitem__(self, key: slice) -> "Melody": ...
+    def __getitem__(self, key: int | slice) -> "MelEvent | Melody":
+        if isinstance(key, slice):
+            return Melody(self.events[key])
+        else:
+            return self.events[key]
     
-    def index(self, value: MelEvent) -> int:
-        """Find the index of a value. O(1) time complexity."""
-        return self.index_map[value]
+    def index(self, value: MelEvent | float) -> int:
+        """Find the index of a value. O(1) time complexity if index_map is built."""
+        if isinstance(value, MelEvent):
+            return self.event_to_index[value]
+        elif isinstance(value, float):
+            return self.time_to_index[value]
+        else:
+            raise TypeError(f"Invalid value type: {type(value)}")
+
+    @property
+    def duration(self) -> float:
+        return self.events[-1].time - self.events[0].time
 
 @deprecated("This implementation is deprecated. Use PianoMidi with precomputed indices for better performance.")
 class _PianoMidi:
@@ -305,6 +430,15 @@ class _PianoMidi:
         
         return results
 
+type time_velocity_tuple = tuple[float, int]
+
+@dataclass(slots=True)
+class Match:
+    current_miss: int
+    sum_miss: int
+    sum_error: float
+    events: list[MidiEvent]
+
 class PianoMidi:
     """
     Optimized MIDI event tracker that uses precomputed indices and lookup tables
@@ -317,9 +451,10 @@ class PianoMidi:
         
         Time Complexity: O(n log n) where n is the number of note events
         """
-        self.events_by_note: dict[int, list[tuple[float, int]]] = {}
+        
+        self.events_by_note: dict[int, list[time_velocity_tuple]] = {}
         self._load_midi(midi_file)
-        self._build_optimized_indices()
+        self._build_indices()
     
     def _load_midi(self, midi_file: Path) -> None:
         """
@@ -334,7 +469,7 @@ class PianoMidi:
         ticks_per_beat = mid.ticks_per_beat
         
         # Convert to absolute time in seconds and extract note_on events
-        all_events = []
+        all_events: list[MidiEvent] = []
         
         for track in mid.tracks:
             track_time_ticks = 0
@@ -360,7 +495,7 @@ class PianoMidi:
         for note in self.events_by_note:
             self.events_by_note[note].sort(key=lambda x: x[0])
     
-    def _build_optimized_indices(self) -> None:
+    def _build_indices(self) -> None:
         """
         Build precomputed data structures to accelerate query performance.
         
@@ -386,77 +521,12 @@ class PianoMidi:
         self.global_times = [event[0] for event in self.global_events]
         
         # 3. Precompute common query patterns using lookup tables
-        self._build_lookup_tables()
-    
-    def _build_lookup_tables(self) -> None:
-        """
-        Build time-bucketed lookup tables to accelerate nearest neighbor queries.
-        
-        Time Complexity: O(n) where n is the number of note events
-        """
-        # For each note, build a lookup table for fast nearest neighbor queries
-        self.nearest_lookup: dict[int, dict[int, int]] = {}  # note -> {time_bucket -> closest_event_idx}
-        
-        for note, times in self.note_times.items():
-            if not times:
-                continue
-                
-            # Create time buckets for constant-time approximate lookups
-            min_time = times[0]
-            max_time = times[-1]
-            
-            if max_time == min_time:
-                # Single event case
-                self.nearest_lookup[note] = {0: 0}
-                continue
-            
-            # Use 1000 buckets for good granularity vs memory tradeoff
-            num_buckets = min(1000, len(times) * 2)
-            bucket_size = (max_time - min_time) / num_buckets
-            
-            lookup_table = {}
-            for bucket in range(num_buckets + 1):
-                bucket_time = min_time + bucket * bucket_size
-                
-                # Find the closest event index for this bucket
-                idx = bisect.bisect_left(times, bucket_time)
-                
-                # Check both neighbors to find the nearest
-                candidates = []
-                if idx > 0:
-                    candidates.append(idx - 1)
-                if idx < len(times):
-                    candidates.append(idx)
-                
-                if candidates:
-                    nearest_idx = min(candidates, key=lambda i: abs(times[i] - bucket_time))
-                    lookup_table[bucket] = nearest_idx
-            
-            self.nearest_lookup[note] = lookup_table
-    
-    def _get_bucket(self, note: int, time: float) -> int:
-        """
-        Get the bucket index for a given note and time.
-        
-        Time Complexity: O(1)
-        """
-        if note not in self.note_times or not self.note_times[note]:
-            return 0
-        
-        times = self.note_times[note]
-        min_time = times[0]
-        max_time = times[-1]
-        
-        if max_time == min_time:
-            return 0
-        
-        num_buckets = min(1000, len(times) * 2)
-        bucket_size = (max_time - min_time) / num_buckets
-        bucket = int((time - min_time) / bucket_size)
-        
-        return max(0, min(bucket, num_buckets))
+        self.note_time_to_index: dict[int, dict[float, int]] = {}
+        # note -> {time -> index}
+        for note, events in self.events_by_note.items():
+            self.note_time_to_index[note] = {event[0]: i for i, event in enumerate(events)}
 
-    @cached_property
+    @property
     def duration(self) -> float:
         """
         Calculate the duration of the MIDI file.
@@ -468,7 +538,7 @@ class PianoMidi:
             return 0.0
         return self.global_events[-1][0]
 
-    def right_nearest(self, mel_event: MelEvent) -> MidiEvent | None:
+    def right_nearest(self, mel_event: MelEvent, use_lookup: bool = True) -> MidiEvent | None:
         """
         Find the nearest occurrence of the note strictly to the right of the given event.
         
@@ -479,6 +549,15 @@ class PianoMidi:
         
         if note not in self.note_times:
             return None
+
+        if use_lookup:
+            idx = self.note_time_to_index[note].get(start_time, None)
+            if idx is not None:
+                if idx < len(self.note_velocities[note]) - 1:
+                    t, v = self.events_by_note[note][idx + 1]
+                    return MidiEvent(t, note, v)
+                else:
+                    return None
         
         times = self.note_times[note]
         velocities = self.note_velocities[note]
@@ -490,7 +569,7 @@ class PianoMidi:
             return MidiEvent(times[idx], note, velocities[idx])
         return None
     
-    def left_nearest(self, mel_event: MelEvent) -> MidiEvent | None:
+    def left_nearest(self, mel_event: MelEvent, use_lookup: bool = True) -> MidiEvent | None:
         """
         Find the nearest occurrence of the note strictly to the left of the given event.
         
@@ -501,6 +580,15 @@ class PianoMidi:
         
         if note not in self.note_times:
             return None
+
+        if use_lookup:
+            idx = self.note_time_to_index[note].get(end_time, None)
+            if idx is not None:
+                if idx > 0:
+                    t, v = self.events_by_note[note][idx - 1]
+                    return MidiEvent(t, note, v)
+                else:
+                    return None
         
         times = self.note_times[note]
         velocities = self.note_velocities[note]
@@ -512,7 +600,7 @@ class PianoMidi:
             return MidiEvent(times[idx], note, velocities[idx])
         return None
 
-    def nearest(self, mel_event: MelEvent, use_buckets: bool = False) -> MidiEvent | None:
+    def nearest(self, mel_event: MelEvent) -> MidiEvent | None:
         """
         Find the nearest occurrence of the note to the given event.
         
@@ -520,10 +608,8 @@ class PianoMidi:
             mel_event: The reference event to find nearest neighbor for
             use_buckets: Whether to use bucket lookup optimization (default: True)
         
-        Time Complexity: 
-            - O(1) for lookup table hits (when use_buckets=True)
-            - O(log k) for misses or when use_buckets=False
-            where k is the number of events for the note
+        Time Complexity:
+            O(log k) where k is the number of events for the note
         """
         note = mel_event.note
         ref_time = mel_event.time
@@ -536,25 +622,6 @@ class PianoMidi:
         
         if not times:
             return None
-        
-        # Try lookup table first for constant-time access (if enabled)
-        if use_buckets and note in self.nearest_lookup:
-            bucket = self._get_bucket(note, ref_time)
-            if bucket in self.nearest_lookup[note]:
-                lookup_idx = self.nearest_lookup[note][bucket]
-                
-                # Verify the lookup result is reasonable (within one bucket)
-                if 0 <= lookup_idx < len(times):
-                    lookup_time = times[lookup_idx]
-                    
-                    # Check if lookup is good enough or if we need to refine
-                    min_time = times[0]
-                    max_time = times[-1]
-                    bucket_size = (max_time - min_time) / min(1000, len(times) * 2) if max_time != min_time else 0
-                    
-                    # If we're within the bucket tolerance, use the lookup result
-                    if abs(lookup_time - ref_time) <= bucket_size:
-                        return MidiEvent(lookup_time, note, velocities[lookup_idx])
         
         # Fallback to binary search for edge cases
         idx = bisect.bisect_left(times, ref_time)
@@ -573,7 +640,7 @@ class PianoMidi:
         nearest_idx = min(candidates, key=lambda i: abs(times[i] - ref_time))
         return MidiEvent(times[nearest_idx], note, velocities[nearest_idx])
     
-    def right_nearest_multi(self, mel_event: MelEvent, n: int) -> list[MidiEvent]:
+    def right_nearest_multi(self, mel_event: MelEvent, n: int, use_lookup: bool = True) -> list[MidiEvent]:
         """
         Find n nearest occurrences of the note strictly to the right of the given event.
         
@@ -584,6 +651,12 @@ class PianoMidi:
         
         if note not in self.note_times or n <= 0:
             return []
+
+        if use_lookup:
+            idx = self.note_time_to_index[note].get(start_time, None)
+            if idx is not None:
+                list_tv = self.events_by_note[note][idx + 1:idx + n + 1]
+                return [MidiEvent(t, note, v) for t, v in list_tv]
         
         times = self.note_times[note]
         velocities = self.note_velocities[note]
@@ -597,7 +670,7 @@ class PianoMidi:
         
         return [MidiEvent(time, note, vel) for time, vel in zip(result_times, result_velocities)]
     
-    def left_nearest_multi(self, mel_event: MelEvent, n: int) -> list[MidiEvent]:
+    def left_nearest_multi(self, mel_event: MelEvent, n: int, use_lookup: bool = True) -> list[MidiEvent]:
         """
         Find n nearest occurrences of the note strictly to the left of the given event.
         
@@ -608,6 +681,17 @@ class PianoMidi:
         
         if note not in self.note_times or n <= 0:
             return []
+
+        if use_lookup:
+            idx = self.note_time_to_index[note].get(end_time, None)
+            if idx is not None:
+                if idx - n - 1 >= 0:
+                    list_tv = self.events_by_note[note][idx-1:idx-n-1:-1]
+                elif idx - 1 >= 0:
+                    list_tv = self.events_by_note[note][idx-1::-1]
+                else:
+                    list_tv = []
+                return [MidiEvent(t, note, v) for t, v in list_tv]
         
         times = self.note_times[note]
         velocities = self.note_velocities[note]
@@ -625,19 +709,16 @@ class PianoMidi:
         
         return [MidiEvent(time, note, vel) for time, vel in zip(result_times, result_velocities)]
     
-    def nearest_multi(self, mel_event: MelEvent, n: int, use_buckets: bool = False) -> list[MidiEvent]:
+    def nearest_multi(self, mel_event: MelEvent, n: int) -> list[MidiEvent]:
         """
         Find n nearest occurrences of the note to the given event.
         
         Args:
             mel_event: The reference event to find nearest neighbors for
             n: Number of nearest events to return
-            use_buckets: Whether to use bucket lookup optimization (default: True)
         
         Time Complexity: 
-            - O(n) for lookup table hits (when use_buckets=True)
-            - O(log k + n) for misses or when use_buckets=False
-            where k is the number of events for the note
+            - O(log k + n) where k is the number of events for the note
         """
         note = mel_event.note
         ref_time = mel_event.time
@@ -651,29 +732,7 @@ class PianoMidi:
         if not times:
             return []
         
-        # Try bucket lookup first for constant-time starting point (if enabled)
-        idx = None
-        if use_buckets and note in self.nearest_lookup:
-            bucket = self._get_bucket(note, ref_time)
-            if bucket in self.nearest_lookup[note]:
-                bucket_idx = self.nearest_lookup[note][bucket]
-                
-                # Verify the bucket result is reasonable
-                if 0 <= bucket_idx < len(times):
-                    bucket_time = times[bucket_idx]
-                    
-                    # Check if bucket is good enough (within tolerance)
-                    min_time = times[0]
-                    max_time = times[-1]
-                    bucket_size = (max_time - min_time) / min(1000, len(times) * 2) if max_time != min_time else 0
-                    
-                    # Use bucket result if it's reasonably close
-                    if abs(bucket_time - ref_time) <= bucket_size * 2:  # Allow 2x tolerance for multi-queries
-                        idx = bucket_idx
-        
-        # Use binary search if bucket lookup is disabled or failed
-        if idx is None:
-            idx = bisect.bisect_left(times, ref_time)
+        idx = bisect.bisect_left(times, ref_time)
         
         # Use two-pointer expansion starting from the determined index
         left = idx - 1
@@ -760,3 +819,142 @@ class PianoMidi:
         results.sort(key=lambda event: abs(event.time - ref_time))
         
         return results
+
+    def match_chunk(self,
+        chunk: Melody,
+        direction: Literal["l2r", "r2l"],
+        local_tolerance: float = 0.1,
+        miss_tolerance: int = 2,
+        tolerate_start: bool = True) -> list[Match]:
+        """
+        Match a chunk of melody events to the most similar MIDI events across the timeline.
+        
+        Args:
+            chunk: A Melody object containing the sequence of events to match against
+            direction: The search direction for building matches. "l2r" for left-to-right, "r2l" for right-to-left.
+            local_tolerance: Maximum allowed time difference for individual event matches (seconds)
+            miss_tolerance: Maximum allowed number of missed events
+        """
+        if len(chunk) == 0:
+            return []
+        if len(chunk) == 1:
+            tv_list = self.events_by_note[chunk[0].note]
+            return [Match(0, 0, 0, [MidiEvent(tv[0], chunk[0].note, tv[1])])
+                    for tv in tv_list]
+        
+        for i in range(miss_tolerance+1):
+            if direction == "l2r":
+                candidates = self.match_chunk(chunk[i:len(chunk)-1], "l2r", local_tolerance, miss_tolerance, False)
+            elif direction == "r2l":
+                candidates = self.match_chunk(chunk[1:len(chunk)-i], "r2l", local_tolerance, miss_tolerance, False)
+            else:
+                raise ValueError(f"Invalid direction: {direction}")
+            if not tolerate_start:
+                break
+            if len(candidates) > 0:
+                for c in candidates:
+                    c.sum_miss += i
+                break
+        
+        if len(candidates) == 0:
+            return []
+
+        output = []
+        for candidate in candidates:
+
+            if direction == "l2r":
+                melody_shift = chunk[-1] - chunk[-2-candidate.current_miss]
+                predicted_event = candidate.events[-1] + melody_shift
+            elif direction == "r2l":
+                melody_shift = chunk[0] - chunk[1+candidate.current_miss]
+                predicted_event = candidate.events[0] + melody_shift
+            else:
+                assert False, "unreachable"
+
+            nearest = self.nearest(predicted_event)
+            if nearest is not None:
+                diff = nearest - predicted_event
+                if abs(diff.time) / abs(melody_shift.time) <= local_tolerance:
+
+                    if direction == "l2r":
+                        candidate.events.append(nearest)
+                    elif direction == "r2l":
+                        candidate.events.insert(0, nearest)
+                    else:
+                        assert False, "unreachable"
+
+                    candidate.current_miss = 0
+                    candidate.sum_error += abs(diff.time)
+                else:
+                    candidate.current_miss += 1
+                    candidate.sum_miss += 1
+            else:
+                candidate.current_miss += 1
+                candidate.sum_miss += 1
+            if candidate.current_miss <= miss_tolerance:
+                output.append(candidate)
+        return output
+
+type MelodyLike = Melody | list[MelEvent] | list[MidiEvent]
+
+def save_melody(melody: MelodyLike, path: Path) -> None:
+    """
+    Save a melody to a MIDI file.
+    Each event's duration extends until the start of the next event.
+    
+    Args:
+        melody: A Melody object or list of events to save
+        path: Path where to save the MIDI file
+    """
+    # Convert to list of events
+    if isinstance(melody, Melody):
+        events = melody.events
+    elif isinstance(melody, list):
+        events = melody
+    else:
+        raise TypeError(f"Invalid melody type: {type(melody)}")
+    
+    if not events:
+        return
+    
+    # Create MIDI file
+    mid = mido.MidiFile()
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    
+    # Add tempo message
+    track.append(mido.MetaMessage('set_tempo', tempo=500000))  # 120 BPM
+    
+    # Convert seconds to ticks
+    ticks_per_beat = mid.ticks_per_beat
+    tempo = 500000  # microseconds per beat
+    
+    def seconds_to_ticks(seconds):
+        return int(seconds * ticks_per_beat * 1000000 / tempo)
+    
+    # Process events
+    current_time = 0.0
+    
+    for i, event in enumerate(events):
+        # Get velocity - default to 64 if not available
+        velocity = event.velocity if isinstance(event, MidiEvent) else 64
+        
+        # Calculate note duration (until next event or default)
+        if i < len(events) - 1:
+            duration = events[i + 1].time - event.time
+        else:
+            duration = 1.0  # Default duration for last note
+        
+        # Add note_on event
+        delta_time = event.time - current_time
+        delta_ticks = seconds_to_ticks(delta_time)
+        track.append(mido.Message('note_on', note=event.note, velocity=velocity, time=delta_ticks))
+        current_time = event.time
+        
+        # Add note_off event
+        duration_ticks = seconds_to_ticks(duration)
+        track.append(mido.Message('note_off', note=event.note, velocity=velocity, time=duration_ticks))
+        current_time += duration
+    
+    # Save the file
+    mid.save(str(path))

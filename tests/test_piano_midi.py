@@ -1,11 +1,29 @@
 import unittest
 from unittest.mock import Mock
+import inspect
 
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from exmel.adt import _PianoMidi, PianoMidi, MelEvent, MidiEvent
+
+
+def bind_methods_to_mock(mock_instance, target_class, exclude_private=True):
+    """
+    Automatically bind all methods from a class to a mock instance.
+    
+    Args:
+        mock_instance: The mock instance to bind methods to
+        target_class: The class to extract methods from
+        exclude_private: Whether to exclude methods starting with '_'
+    """
+    for name, method in inspect.getmembers(target_class, predicate=inspect.isfunction):
+        if exclude_private and name.startswith('_') or name == "__init__":
+            continue
+        
+        setattr(mock_instance, name, method.__get__(mock_instance, target_class))
+
 
 class TestPianoMidiQuerying(unittest.TestCase):
     """Comprehensive tests for PianoMidi querying methods."""
@@ -21,13 +39,8 @@ class TestPianoMidiQuerying(unittest.TestCase):
             48: [(1.2, 75)],  # C3
         }
         
-        # Bind the methods to the mock instance
-        self.piano_midi.right_nearest = _PianoMidi.right_nearest.__get__(self.piano_midi, _PianoMidi)
-        self.piano_midi.left_nearest = _PianoMidi.left_nearest.__get__(self.piano_midi, _PianoMidi)
-        self.piano_midi.nearest = _PianoMidi.nearest.__get__(self.piano_midi, _PianoMidi)
-        self.piano_midi.right_nearest_multi = _PianoMidi.right_nearest_multi.__get__(self.piano_midi, _PianoMidi)
-        self.piano_midi.left_nearest_multi = _PianoMidi.left_nearest_multi.__get__(self.piano_midi, _PianoMidi)
-        self.piano_midi.nearest_multi = _PianoMidi.nearest_multi.__get__(self.piano_midi, _PianoMidi)
+        # Bind all methods automatically
+        bind_methods_to_mock(self.piano_midi, _PianoMidi)
 
     def test_right_nearest_basic(self):
         """Test basic right_nearest functionality."""
@@ -229,13 +242,8 @@ class TestPianoMidiQuerying(unittest.TestCase):
         empty_piano = Mock(spec=_PianoMidi)
         empty_piano.events_by_note = {}
         
-        # Bind methods
-        empty_piano.right_nearest = _PianoMidi.right_nearest.__get__(empty_piano, _PianoMidi)
-        empty_piano.left_nearest = _PianoMidi.left_nearest.__get__(empty_piano, _PianoMidi)
-        empty_piano.nearest = _PianoMidi.nearest.__get__(empty_piano, _PianoMidi)
-        empty_piano.right_nearest_multi = _PianoMidi.right_nearest_multi.__get__(empty_piano, _PianoMidi)
-        empty_piano.left_nearest_multi = _PianoMidi.left_nearest_multi.__get__(empty_piano, _PianoMidi)
-        empty_piano.nearest_multi = _PianoMidi.nearest_multi.__get__(empty_piano, _PianoMidi)
+        # Bind all methods automatically
+        bind_methods_to_mock(empty_piano, _PianoMidi)
         
         # All queries should return None or empty list
         self.assertIsNone(empty_piano.right_nearest(MelEvent(2.0, 60)))
@@ -290,44 +298,22 @@ class TestOptimizedPianoMidiQuerying(TestPianoMidiQuerying):
             48: [(1.2, 75)],  # C3
         }
         
-        # Bind the methods to the mock instance
-        self.piano_midi.right_nearest = PianoMidi.right_nearest.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi.left_nearest = PianoMidi.left_nearest.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi.nearest = PianoMidi.nearest.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi.right_nearest_multi = PianoMidi.right_nearest_multi.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi.left_nearest_multi = PianoMidi.left_nearest_multi.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi.nearest_multi = PianoMidi.nearest_multi.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi.nearest_global = PianoMidi.nearest_global.__get__(self.piano_midi, PianoMidi)
-        
-        # Bind the private methods and reuse the actual optimization logic
-        self.piano_midi._build_optimized_indices = PianoMidi._build_optimized_indices.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi._build_lookup_tables = PianoMidi._build_lookup_tables.__get__(self.piano_midi, PianoMidi)
-        self.piano_midi._get_bucket = PianoMidi._get_bucket.__get__(self.piano_midi, PianoMidi)
+        # Bind all methods automatically (including private ones for optimization)
+        bind_methods_to_mock(self.piano_midi, PianoMidi, exclude_private=False)
         
         # Build the optimized indices using the actual class methods
-        self.piano_midi._build_optimized_indices()
+        self.piano_midi._build_indices()
 
     def test_empty_piano_midi(self):
         """Test behavior with empty OptimizedPianoMidi instance."""
         empty_optimized = Mock(spec=PianoMidi)
         empty_optimized.events_by_note = {}
         
-        # Bind methods
-        empty_optimized.right_nearest = PianoMidi.right_nearest.__get__(empty_optimized, PianoMidi)
-        empty_optimized.left_nearest = PianoMidi.left_nearest.__get__(empty_optimized, PianoMidi)
-        empty_optimized.nearest = PianoMidi.nearest.__get__(empty_optimized, PianoMidi)
-        empty_optimized.right_nearest_multi = PianoMidi.right_nearest_multi.__get__(empty_optimized, PianoMidi)
-        empty_optimized.left_nearest_multi = PianoMidi.left_nearest_multi.__get__(empty_optimized, PianoMidi)
-        empty_optimized.nearest_multi = PianoMidi.nearest_multi.__get__(empty_optimized, PianoMidi)
-        empty_optimized.nearest_global = PianoMidi.nearest_global.__get__(empty_optimized, PianoMidi)
-        
-        # Bind the private methods and initialize using actual class methods
-        empty_optimized._build_optimized_indices = PianoMidi._build_optimized_indices.__get__(empty_optimized, PianoMidi)
-        empty_optimized._build_lookup_tables = PianoMidi._build_lookup_tables.__get__(empty_optimized, PianoMidi)
-        empty_optimized._get_bucket = PianoMidi._get_bucket.__get__(empty_optimized, PianoMidi)
+        # Bind all methods automatically (including private ones for optimization)
+        bind_methods_to_mock(empty_optimized, PianoMidi, exclude_private=False)
         
         # Build the optimized indices using the actual class methods
-        empty_optimized._build_optimized_indices()
+        empty_optimized._build_indices()
         
         # All queries should return None or empty list
         self.assertIsNone(empty_optimized.right_nearest(MelEvent(2.0, 60)))

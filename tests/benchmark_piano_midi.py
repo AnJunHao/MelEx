@@ -67,7 +67,7 @@ class PianoMidiComparativeBenchmark:
         class MockOptimizedPianoMidi(PianoMidi):
             def __init__(self, events_by_note: dict[int, list[tuple[float, int]]]):
                 self.events_by_note = events_by_note
-                self._build_optimized_indices()
+                self._build_indices()
         
         piano_midi = MockPianoMidi(events_by_note)
         optimized_piano_midi = MockOptimizedPianoMidi(events_by_note)
