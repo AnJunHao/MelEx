@@ -129,9 +129,6 @@ class Melody:
             self.events = [MelEvent(event.time, event.note) for event in source]
         else:
             raise TypeError(f"Invalid source type: {type(source)}")
-
-        self.event_to_index = {event: i for i, event in enumerate(self.events)}
-        self.time_to_index = {event.time: i for i, event in enumerate(self.events)}
     
     def _load_midi(self, midi_file: Path, track_idx: int | None = None) -> None:
         """
@@ -231,21 +228,25 @@ class Melody:
 
     def __iter__(self) -> Iterator[MelEvent]:
         return iter(self.events)
-    
-    def index(self, value: MelEvent | float) -> int:
-        """Find the index of a value. O(1) time complexity if index_map is built."""
-        if isinstance(value, MelEvent):
-            return self.event_to_index[value]
-        elif isinstance(value, float):
-            return self.time_to_index[value]
-        else:
-            raise TypeError(f"Invalid value type: {type(value)}")
+
+    def nearest(self, time: float) -> MelEvent:
+        """
+        Find the nearest event to the given time.
+        """
+        idx = bisect.bisect_left(self.events, time, key=lambda x: x.time)
+        candidates = []
+        if idx > 0:
+            candidates.append(idx - 1)
+        if idx < len(self.events):
+            candidates.append(idx)
+        return self.events[min(candidates, key=lambda x: abs(self.events[x].time - time))]
 
     @property
     def duration(self) -> float:
         return self.events[-1].time - self.events[0].time
 
 type time_velocity_tuple = tuple[float, int]
+type MelodyLike = Melody | list[MelEvent] | list[MidiEvent]
 
 @dataclass(slots=True)
 class Match:
@@ -649,6 +650,7 @@ class PianoMidi:
             direction: The search direction for building matches. "l2r" for left-to-right, "r2l" for right-to-left.
             local_tolerance: Maximum allowed time difference for individual event matches (seconds)
             miss_tolerance: Maximum allowed number of missed events
+            tolerate_start: Whether to tolerate at the start of the search (based on direction)
         """
         if len(chunk) == 0:
             return []
@@ -710,3 +712,13 @@ class PianoMidi:
                 output.append(candidate)
         return output
 
+    def match(self,
+        melody: Melody,
+        local_tolerance: float = 0.1,
+        miss_tolerance: int = 2,
+        tolerate_start: bool = True,
+        length_threshold: int = 10) -> Match:
+        """
+        Match a melody to the most similar MIDI events across the timeline.
+        """
+        raise NotImplementedError("Not implemented")
