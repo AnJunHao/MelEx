@@ -5,7 +5,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.figure import Figure
 import pretty_midi
 import os
-from exmel.adt import MelodyLike, Melody
+from exmel.sequence import MelodyLike, Melody
 from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)

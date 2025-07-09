@@ -1,7 +1,7 @@
 from pathlib import Path
 import mido
 
-from exmel.adt import Melody, MidiEvent, MelodyLike
+from exmel.sequence import Melody, MidiEvent, MelodyLike
 
 def save_melody(melody: MelodyLike, path: Path) -> None:
     """
