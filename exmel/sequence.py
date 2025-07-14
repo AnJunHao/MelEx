@@ -153,11 +153,17 @@ class Melody:
         from exmel.vis import plot_melody
         plot_melody(self, save_path, show_plot)
 
+    def diff(self) -> list[float]:
+        return [self[i+1].time - self[i].time for i in range(len(self)-1)]
+
+    def mean_diff(self) -> float:
+        return statistics.geometric_mean(self.diff())
+
     def split(self, threshold: float = 16) -> list["Melody"]:
         """
         Separate the melody into multiple melodies based on the threshold.
         """
-        diffs = [self[i+1].time - self[i].time for i in range(len(self)-1)]
+        diffs = self.diff()
         threshold = statistics.geometric_mean(diffs) * threshold
         indices = [i+1 for i, d in enumerate(diffs) if d > threshold]
         indices = [0] + indices + [len(self)]
@@ -251,13 +257,13 @@ class Performance:
             return 0.0
         return self.global_events[-1].time
 
-    def nearest(self, mel_event: EventLike) -> MidiEvent | None:
+    def nearest(self, mel_event: EventLike, start: float | None = None) -> MidiEvent | None:
         """
         Find the nearest occurrence of the note to the given event.
         
         Args:
             mel_event: The reference event to find nearest neighbor for
-            use_buckets: Whether to use bucket lookup optimization (default: True)
+            start: If provided, only consider events strictly after this time
         
         Time Complexity:
             O(log k) where k is the number of events for the note
@@ -274,14 +280,22 @@ class Performance:
         if not times:
             return None
         
-        # Fallback to binary search for edge cases
+        # Find the minimum valid index based on start constraint
+        if start is not None:
+            min_idx = bisect.bisect_right(times, start)
+            if min_idx >= len(times):
+                return None  # No events strictly after start time
+        else:
+            min_idx = 0
+        
+        # Binary search for the reference time
         idx = bisect.bisect_left(times, ref_time)
         
-        # Check neighbors to find the nearest
+        # Check neighbors to find the nearest, but only at or after min_idx
         candidates = []
-        if idx > 0:
+        if idx > min_idx:
             candidates.append(idx - 1)
-        if idx < len(times):
+        if idx < len(times) and idx >= min_idx:
             candidates.append(idx)
         
         if not candidates:
@@ -403,5 +417,48 @@ class Performance:
     def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
         from exmel.vis import plot_performance
         plot_performance(self, save_path, show_plot)
+
+    def between(self, from_: MelEvent, to_: MelEvent) -> list[MidiEvent]:
+        """
+        Extract all events for a specific note within a given time range.
+        
+        Args:
+            note: The MIDI note number to search for
+            start_time: The start time of the range (inclusive)
+            end_time: The end time of the range (inclusive)
+        
+        Returns:
+            List of MidiEvent objects for the specified note within the time range,
+            sorted by time.
+        
+        Time Complexity: O(log k + m) where k is the number of events for the note
+                         and m is the number of events in the range
+        """
+        note = from_.note
+        assert note == to_.note
+        start_time, end_time = from_.time, to_.time
+        
+        if note not in self.note_times:
+            return []
+        
+        if start_time > end_time:
+            return []
+        
+        times = self.note_times[note]
+        velocities = self.note_velocities[note]
+        
+        if not times:
+            return []
+        
+        # Use binary search to find the start and end indices
+        start_idx = bisect.bisect_left(times, start_time)
+        end_idx = bisect.bisect_right(times, end_time)
+        
+        # Extract events in the range
+        results = []
+        for i in range(start_idx, end_idx):
+            results.append(MidiEvent(times[i], note, velocities[i]))
+        
+        return results
 
 type PerformanceLike = Performance | PathLike | Iterable[MidiEvent]

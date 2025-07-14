@@ -1,0 +1,11 @@
+{
+    "score_func": "duration_adjusted_weighted_sum_velocity",
+    "same_key": false,
+    "same_speed": false,
+    "local_tolerance": 0.5,
+    "miss_tolerance": 2,
+    "candidate_min_score": 8,
+    "candidate_min_length": 10,
+    "hop_length": 2,
+    "split_melody": true
+}

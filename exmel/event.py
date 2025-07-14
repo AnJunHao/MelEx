@@ -1,6 +1,6 @@
 from functools import cache
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, overload
 import warnings
 
 @cache
@@ -56,10 +56,16 @@ class MelEvent:
             return MelEvent(self.time, self.note + other)
         return NotImplemented
 
-    def __truediv__(self, other: 'MelEvent') -> float:
+    @overload
+    def __truediv__(self, other: float) -> 'MelEvent': ...
+    @overload
+    def __truediv__(self, other: 'MelEvent') -> float: ...
+    def __truediv__(self, other: 'float | MelEvent') -> 'MelEvent | float':
         # "a / b": time ratio
         if isinstance(other, MelEvent):
             return self.time / other.time
+        elif isinstance(other, (float, int)):
+            return MelEvent(self.time / other, self.note)
         return NotImplemented
     
     def __mul__(self, other: float) -> 'MelEvent':

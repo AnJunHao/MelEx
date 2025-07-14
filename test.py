@@ -1,35 +1,25 @@
 import exmel
 from pathlib import Path
-from openpyxl import load_workbook
-from typing import NamedTuple
 import numpy as np
 import pandas as pd
 import time
-from dataclasses import dataclass
+from datetime import datetime
+import json
 
-@dataclass
-class AlignParams:
-    split_melody: bool = True
-    hop_length: int = 2
+config = exmel.AlignConfig(
+    score_func=exmel.duration_adjusted_weighted_sum_velocity,
+    same_key=False,
+    same_speed=False,
+    local_tolerance=0.5,
+    miss_tolerance=2,
+    candidate_min_score=8,
+    candidate_min_length=10,
+    hop_length=2,
+    split_melody=True
+)
 
-params = AlignParams()
-
-base_path = Path("mid_files/test")
-xlsx_file = base_path / "table.xlsx"
-workbook = load_workbook(xlsx_file)
-sheet = workbook["Sheet1"]
-
-class Row(NamedTuple):
-    id_: str
-    hash_: str
-    song_name: str
-    singer: str
-
-table: list[Row] = []
-for row in sheet.iter_rows(min_row=2, max_col=10, values_only=True):
-    if row[0] is None:
-        break
-    table.append(Row(*[str(i) for i in row[:4]])) # type: ignore
+# Use the dataset directory
+dataset_path = Path("dataset")
 
 # Store results for statistical analysis
 baseline_results = []
@@ -37,37 +27,50 @@ alignment_results = []
 sample_names = []
 alignment_runtimes = []
 
-result_dir = Path("results")
+result_dir = Path("results") / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 result_dir.mkdir(exist_ok=True)
 
-for row in table:
-    print(f"Aligning {row.song_name}...")
+# Save the parameters
+config_dict = config.__dict__.copy()
+# Convert function to string representation for JSON serialization
+config_dict['score_func'] = config_dict['score_func'].__name__
+with open(result_dir / 'params.json', 'w') as f:
+    json.dump(config_dict, f, indent=4)
 
-    melody = base_path / "melody" / f"{row.hash_}.est.note"
-    transcription = base_path / "piano_melody_test_samples" / row.id_ / f"{row.id_}_transcription.mid"
-    ground_truth = exmel.Melody(
-        base_path / "piano_melody_test_samples" / row.id_ / f"{row.id_}_rectified.mid",
-        track_idx=3)
-    baseline = exmel.Melody(
-        base_path / "piano_melody_test_samples" / row.id_ / f"{row.id_}.mid",
-        track_idx=3)
+# Get all song directories
+song_dirs = [d for d in dataset_path.iterdir() if d.is_dir()]
+
+for i, song_dir in enumerate(song_dirs):
+    song_name = song_dir.name
+    print(f"Aligning <{song_name}> ({i+1}/{len(song_dirs)})...")
+
+    # Define file paths based on the new structure
+    melody_file = song_dir / f"{song_name}.m.mid"
+    transcription_file = song_dir / f"{song_name}.t.mid"
+    ground_truth_file = song_dir / f"{song_name}.gt.mid"
+    baseline_file = song_dir / f"{song_name}.bl.mid"
+
+    # Check if all required files exist
+    if not all(f.exists() for f in [melody_file, transcription_file, ground_truth_file, baseline_file]):
+        print(f"Skipping {song_name} - missing required files")
+        continue
+
+    # Load the files
+    ground_truth = exmel.Melody(ground_truth_file, track_idx=3)
+    baseline = exmel.Melody(baseline_file, track_idx=3)
 
     # Time the alignment operation
     start_time = time.time()
-    alignment = exmel.align(melody, transcription,
-        exmel.duration_adjusted_weighted_sum_velocity,
-        split_melody=params.split_melody,
-        hop_length=params.hop_length)
+    alignment = exmel.align(melody_file, transcription_file, config)
     end_time = time.time()
     runtime = end_time - start_time
 
     result_baseline = exmel.evaluate_melody(ground_truth, baseline, plot=False)
     result_alignment = exmel.evaluate_melody(
-        ground_truth, alignment.events,
-        plot=False, save_path=f"results/{row.song_name}_eval.png")
+        ground_truth, alignment.events, plot=False)
 
-    exmel.save_melody(alignment.events, f"results/{row.song_name}.mid")
-    exmel.plot_alignment(alignment, melody, transcription, ground_truth, f"results/{row.song_name}_align.png")
+    exmel.save_melody(alignment.events, result_dir / f"{song_name}.mid")
+    exmel.plot_alignment(alignment, melody_file, transcription_file, ground_truth, result_dir / f"{song_name}_align.png")
 
     # Print results
     print(f"Baseline: {result_baseline.precision*100:.1f}% {result_baseline.recall*100:.1f}% {result_baseline.f1_score*100:.1f}%")
@@ -77,7 +80,7 @@ for row in table:
     # Store results
     baseline_results.append(result_baseline)
     alignment_results.append(result_alignment)
-    sample_names.append(row.song_name)
+    sample_names.append(song_name)
     alignment_runtimes.append(runtime)
 
 # Calculate aggregate statistics
@@ -118,7 +121,7 @@ print("\n" + "="*80)
 print("EVALUATION RESULTS SUMMARY")
 print("="*80)
 
-print(f"\nTested on {len(table)} samples")
+print(f"\nTested on {len(sample_names)} samples")
 
 print("\nBASELINE RESULTS:")
 print("-" * 40)
@@ -187,5 +190,5 @@ results_data.append({
 df = pd.DataFrame(results_data)
 
 # Save results to CSV
-df.to_csv('evaluation_results.csv', index=False)
-print(f"\nDetailed results saved to 'evaluation_results.csv'")
+df.to_csv(result_dir / 'results.csv', index=False)
+print(f"\nDetailed results saved to '{result_dir / 'results.csv'}'")

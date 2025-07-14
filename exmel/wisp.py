@@ -3,6 +3,7 @@
 import bisect
 from typing import Protocol, Sequence
 from dataclasses import dataclass
+from tqdm import tqdm
 
 class Event(Protocol):
     @property
@@ -14,17 +15,20 @@ class Event(Protocol):
     @property
     def score(self) -> float: ...
 
-def find_last_non_overlapping(events: Sequence[Event], index: int) -> int:
-    # Find the last event that ends before events[index].start
-    left = [event.end for event in events]
-    return bisect.bisect_right(left, events[index].start) - 1
+def find_last_non_overlapping(ends: Sequence[float], start: float) -> int:
+    # Find the last event that ends before start
+    return bisect.bisect_right(ends, start) - 1
 
-def weighted_interval_scheduling[T: Event](events: Sequence[T]) -> tuple[float, list[T]]:
+def weighted_interval_scheduling[T: Event](
+    events: Sequence[T],
+    verbose: bool = False
+    ) -> tuple[float, list[T]]:
     if not events:
         return 0.0, []
     
     # Sort events by their end time
     sorted_events = sorted(events, key=lambda x: x.end)
+    ends = [event.end for event in sorted_events]
 
     # DP array to store the maximum score
     n = len(sorted_events)
@@ -34,13 +38,13 @@ def weighted_interval_scheduling[T: Event](events: Sequence[T]) -> tuple[float, 
     dp[0] = sorted_events[0].score
 
     # Fill the dp array using the recurrence relation
-    for i in range(1, n):
+    for i in tqdm(range(1, n), disable=not verbose):
         # Option 1: Don't select current event
         exclude_score = dp[i-1]
         
         # Option 2: Select current event
         include_score = sorted_events[i].score
-        last_non_overlap = find_last_non_overlapping(sorted_events, i)
+        last_non_overlap = find_last_non_overlapping(ends, sorted_events[i].start)
         if last_non_overlap != -1:
             include_score += dp[last_non_overlap]
         
@@ -61,7 +65,7 @@ def weighted_interval_scheduling[T: Event](events: Sequence[T]) -> tuple[float, 
         # Check if current event was included in the optimal solution
         exclude_score = dp[i-1]
         include_score = sorted_events[i].score
-        last_non_overlap = find_last_non_overlapping(sorted_events, i)
+        last_non_overlap = find_last_non_overlapping(ends, sorted_events[i].start)
         if last_non_overlap != -1:
             include_score += dp[last_non_overlap]
         
@@ -95,6 +99,7 @@ if __name__ == "__main__":
         _Event(0, 5, 4),
         _Event(3, 6, 1),
         _Event(4, 7, 2),
+        _Event(3, 9, 5),
         _Event(3, 9, 5),
         _Event(5, 10, 2),
         _Event(8, 10, 1),

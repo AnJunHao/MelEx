@@ -7,7 +7,7 @@ from matplotlib.figure import Figure
 from dataclasses import dataclass
 
 from exmel.sequence import MelodyLike, Melody, PerformanceLike, Performance
-from exmel.alignment import Alignment
+from exmel.alignment import Alignment, Match
 from exmel.io import PathLike
 
 def plot_alignment(
@@ -15,7 +15,7 @@ def plot_alignment(
     ref_melody: MelodyLike,
     performance: PerformanceLike | None = None,
     ground_truth: MelodyLike | None = None,
-    save_path: str | None = None
+    save_path: PathLike | None = None
 ) -> None:
     """
     Visualize the alignment by showing the source of each match chunk.
@@ -162,12 +162,13 @@ def plot_alignment(
                 fn_events.append(gt_original[j])
     
     # Helper function to calculate match statistics
-    def get_match_stats(match):
+    def get_match_stats(match: Match):
         duration = match.end - match.start
         num_events = len(match.events)
         num_misses = match.sum_miss
         sum_error = match.sum_error
         score = match.score
+        speed = match.speed
         
         # Calculate average velocity from events
         if match.events:
@@ -181,7 +182,8 @@ def plot_alignment(
             'num_misses': num_misses,
             'score': score,
             'avg_velocity': avg_velocity,
-            'sum_error': sum_error
+            'sum_error': sum_error,
+            'speed': speed
         }
     
     # Helper function to draw piano roll
@@ -217,6 +219,7 @@ def plot_alignment(
                 match_text += f'Vel: {stats["avg_velocity"]:.0f}\n'
                 match_text += f'Events: {stats["num_events"]}\n'
                 match_text += f'Misses: {stats["num_misses"]}\n'
+                match_text += f'Speed: {stats["speed"]:.2f}\n'
                 match_text += f"Err: {stats["sum_error"]:.2f}"
                 
                 # Position the label at the center of the match region
@@ -635,7 +638,7 @@ def evaluate_melody(
     tolerance: float = 0.1,
     modulo: bool = True,
     plot: bool = True,
-    save_path: str | None = None,
+    save_path: PathLike | None = None,
 ) -> EvaluationResult:
     """
     Evaluate the accuracy of a predicted melody against a ground truth melody.
@@ -698,7 +701,7 @@ def evaluate_melody(
     return EvaluationResult(tp, fp, fn, precision, recall, f1_score, fig)
 
 def _create_evaluation_piano_roll(tp_notes, fp_notes, fn_notes, gt, pred, 
-                                  save_path: str | None = None, note_height=0.8):
+                                  save_path: PathLike | None = None, note_height=0.8):
     """
     Create a piano roll visualization showing tp/fp/fn with color coding.
     Automatically adjusts figure size based on melody length and duration.
