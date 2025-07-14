@@ -1,24 +1,79 @@
 from pathlib import Path
+from typing import overload, Literal, Iterable
 import mido
 
-from exmel.sequence import Melody, MidiEvent, MelodyLike
+from exmel.event import MidiEvent, MelEvent, EventLike
 
-def save_melody(melody: MelodyLike, path: Path) -> None:
-    """
-    Save a melody to a MIDI file.
-    Each event's duration extends until the start of the next event.
-    
-    Args:
-        melody: A Melody object or list of events to save
-        path: Path where to save the MIDI file
-    """
-    # Convert to list of events
-    if isinstance(melody, Melody):
-        events = melody.events
-    elif isinstance(melody, list):
-        events = melody
+type PathLike = Path | str
+
+@overload
+def load_midi(
+    midi_file: PathLike,
+    track_idx: int | None = None,
+    include_velocity: Literal[True] = True,
+) -> list[MidiEvent]: ...
+@overload
+def load_midi(
+    midi_file: PathLike,
+    track_idx: int | None = None,
+    include_velocity: Literal[False] = False,
+) -> list[MelEvent]: ...
+def load_midi(
+    midi_file: PathLike,
+    track_idx: int | None = None,
+    include_velocity: bool = True,
+) -> list[MidiEvent] | list[MelEvent]:
+
+    mid = mido.MidiFile(midi_file)
+        
+    # Track tempo changes and convert ticks to seconds
+    tempo = 500000  # Default tempo (120 BPM)
+    ticks_per_beat = mid.ticks_per_beat
+    events: list[MidiEvent | MelEvent] = []
+
+    # Get the specified track or all tracks
+    if track_idx is None:
+        iter_tracks = mid.tracks
     else:
-        raise TypeError(f"Invalid melody type: {type(melody)}")
+        iter_tracks = [mid.tracks[track_idx]]
+
+    # Process all specified tracks to get note events with their exact timing (and velocity)
+    for track in iter_tracks:
+        track_time_ticks = 0
+        for msg in track:
+            track_time_ticks += msg.time
+            
+            # Handle tempo changes
+            if msg.type == 'set_tempo':
+                tempo = msg.tempo
+            
+            if msg.type == 'note_on' and msg.velocity > 0:  # Note onset
+                # Convert ticks to seconds using current tempo
+                time_seconds = track_time_ticks * tempo / (ticks_per_beat * 1000000)
+                if include_velocity:
+                    events.append(MidiEvent(time_seconds, msg.note, msg.velocity))
+                else:
+                    events.append(MelEvent(time_seconds, msg.note))
+
+    events.sort(key=lambda x: x.time)
+
+    return events
+
+def load_note(
+    note_file: PathLike,
+) -> list[MelEvent]:
+    with open(note_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    events = []
+    for line in lines:
+        start, end, note = line.split()
+        events.append(MelEvent(float(start), int(note)))
+    return events
+
+def save_melody(melody: Iterable[EventLike], path: PathLike) -> None:
+    
+    # Convert to list of events
+    events = list(melody)
     
     if not events:
         return
@@ -68,7 +123,7 @@ def save_melody(melody: MelodyLike, path: Path) -> None:
     # Save the file
     mid.save(str(path))
 
-def extract_original_events(melody: MelodyLike, original_midi: Path, output_path: Path) -> None:
+def extract_original_events(melody: Iterable[EventLike], original_midi: Path, output_path: Path) -> None:
     """
     Extract original MIDI events from a MIDI file based on an extracted melody.
     
@@ -82,12 +137,7 @@ def extract_original_events(melody: MelodyLike, original_midi: Path, output_path
         output_path: Path where to save the extracted MIDI file
     """
     # Convert to list of events
-    if isinstance(melody, Melody):
-        events = melody.events
-    elif isinstance(melody, list):
-        events = melody
-    else:
-        raise TypeError(f"Invalid melody type: {type(melody)}")
+    events = list(melody)
     
     if not events:
         return

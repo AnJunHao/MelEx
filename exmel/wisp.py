@@ -19,7 +19,7 @@ def find_last_non_overlapping(events: Sequence[Event], index: int) -> int:
     left = [event.end for event in events]
     return bisect.bisect_right(left, events[index].start) - 1
 
-def weighted_interval_scheduling(events: Sequence[Event]) -> tuple[float, list[Event]]:
+def weighted_interval_scheduling[T: Event](events: Sequence[T]) -> tuple[float, list[T]]:
     if not events:
         return 0.0, []
     
@@ -48,7 +48,7 @@ def weighted_interval_scheduling(events: Sequence[Event]) -> tuple[float, list[E
         dp[i] = max(exclude_score, include_score)
     
     # Backtrack to find the optimal subset
-    optimal_events: list[Event] = []
+    optimal_events: list[T] = []
     i = n - 1
     
     while i >= 0:

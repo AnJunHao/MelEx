@@ -1,29 +1,32 @@
 from pathlib import Path
 import bisect
 import mido
-from typing import Literal, Iterator, overload, Sequence
+from typing import Literal, Iterator, overload, Iterable
 import warnings
+import statistics
 
 from exmel.event import MelEvent, MidiEvent, EventLike
-# from exmel.align import Match
-
-warnings.simplefilter("once")
+from exmel.io import load_midi, load_note, PathLike, save_melody
 
 class Melody:
 
     def __init__(self,
-                source: "Path | Melody | Sequence[EventLike]",
+                source: "PathLike | Melody | Iterable[EventLike]",
                 track_idx: int | None = None) -> None:
         """
         Initialize the melody with a MIDI file.
         """
-        if isinstance(source, Path):
-            assert source.exists(), f"File {source} does not exist"
-            self.events: list[MelEvent] = []
-            self._load_midi(source, track_idx)
+        if isinstance(source, (Path, str)):
+            source = Path(source)
+            if source.suffix in (".mid", ".midi"):
+                self.events = load_midi(source, track_idx, include_velocity=False)
+            elif source.suffix in (".note"):
+                self.events = load_note(source)
+            else:
+                raise ValueError(f"Invalid file type: {source.suffix}")
         elif isinstance(source, Melody):
             self.events = source.events
-        elif isinstance(source, Sequence):
+        elif isinstance(source, Iterable):
             self.events = [MelEvent(event.time, event.note) for event in source]
         else:
             raise TypeError(f"Invalid source type: {type(source)}")
@@ -143,8 +146,25 @@ class Melody:
     def duration(self) -> float:
         return self.events[-1].time - self.events[0].time
 
+    def save(self, path: PathLike) -> None:
+        save_melody(self.events, path)
+
+    def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
+        from exmel.vis import plot_melody
+        plot_melody(self, save_path, show_plot)
+
+    def split(self, threshold: float = 16) -> list["Melody"]:
+        """
+        Separate the melody into multiple melodies based on the threshold.
+        """
+        diffs = [self[i+1].time - self[i].time for i in range(len(self)-1)]
+        threshold = statistics.geometric_mean(diffs) * threshold
+        indices = [i+1 for i, d in enumerate(diffs) if d > threshold]
+        indices = [0] + indices + [len(self)]
+        return [Melody(self.events[indices[i]:indices[i+1]]) for i in range(len(indices)-1)]
+
 type time_velocity_tuple = tuple[float, int]
-type MelodyLike = Melody | Sequence[EventLike] | Path
+type MelodyLike = Melody | Iterable[EventLike] | PathLike
 
 class Performance:
     """
@@ -152,7 +172,7 @@ class Performance:
     to support efficient nearest neighbor queries on note events.
     """
     
-    def __init__(self, source: 'Path | Performance | Sequence[MidiEvent]') -> None:
+    def __init__(self, source: 'PathLike | Performance | Iterable[MidiEvent]') -> None:
         """
         Initialize the tracker by loading MIDI data and building search indices.
         
@@ -169,40 +189,20 @@ class Performance:
             self.global_times = source.global_times
             self.note_times = source.note_times
             self.note_velocities = source.note_velocities
-        elif isinstance(source, Sequence):
+        elif isinstance(source, Iterable):
             self.events_by_note = {event.note: [(event.time, event.velocity)] for event in source}
             self._build_indices()
         else:
             raise TypeError(f"Invalid source type: {type(source)}")
     
-    def _load_midi(self, midi_file: Path) -> None:
+    def _load_midi(self, midi_file: PathLike) -> None:
         """
         Load MIDI file, convert ticks to seconds, and organize events by note.
         
         Time Complexity: O(n log n) where n is the number of note events
         """
-        mid = mido.MidiFile(str(midi_file))
-        
-        # Track tempo changes and convert ticks to seconds
-        tempo = 500000  # Default tempo (120 BPM)
-        ticks_per_beat = mid.ticks_per_beat
-        
-        # Convert to absolute time in seconds and extract note_on events
-        all_events: list[MidiEvent] = []
-        
-        for track in mid.tracks:
-            track_time_ticks = 0
-            for msg in track:
-                track_time_ticks += msg.time
-                
-                # Handle tempo changes
-                if msg.type == 'set_tempo':
-                    tempo = msg.tempo
-                
-                if msg.type == 'note_on' and msg.velocity > 0:  # Note onset
-                    # Convert ticks to seconds using current tempo
-                    time_seconds = track_time_ticks * tempo / (ticks_per_beat * 1000000)
-                    all_events.append(MidiEvent(time_seconds, msg.note, msg.velocity))
+
+        all_events = load_midi(midi_file)
         
         # Organize events by note
         for event in all_events:
@@ -231,13 +231,13 @@ class Performance:
             self.note_velocities[note] = velocities
         
         # 2. Build global time-sorted index for cross-note queries
-        self.global_events: list[tuple[float, int, int]] = []  # (time, note, velocity)
+        self.global_events: list[MidiEvent] = []  # (time, note, velocity)
         for note, events in self.events_by_note.items():
             for time, velocity in events:
-                self.global_events.append((time, note, velocity))
+                self.global_events.append(MidiEvent(time, note, velocity))
         
-        self.global_events.sort()  # Sort by time
-        self.global_times = [event[0] for event in self.global_events]
+        self.global_events.sort(key=lambda x: x.time)  # Sort by time
+        self.global_times = [event.time for event in self.global_events]
 
     @property
     def duration(self) -> float:
@@ -249,7 +249,7 @@ class Performance:
         """
         if not self.global_events:
             return 0.0
-        return self.global_events[-1][0]
+        return self.global_events[-1].time
 
     def nearest(self, mel_event: EventLike) -> MidiEvent | None:
         """
@@ -381,18 +381,16 @@ class Performance:
             
             # Calculate distances
             if left >= 0:
-                left_dist = abs(self.global_events[left][0] - ref_time)
+                left_dist = abs(self.global_events[left].time - ref_time)
             if right < len(self.global_events):
-                right_dist = abs(self.global_events[right][0] - ref_time)
+                right_dist = abs(self.global_events[right].time - ref_time)
             
             # Choose the closer event
             if left_dist <= right_dist and left >= 0:
-                time, note, velocity = self.global_events[left]
-                results.append(MidiEvent(time, note, velocity))
+                results.append(self.global_events[left])
                 left -= 1
             elif right < len(self.global_events):
-                time, note, velocity = self.global_events[right]
-                results.append(MidiEvent(time, note, velocity))
+                results.append(self.global_events[right])
                 right += 1
             else:
                 break
@@ -402,97 +400,8 @@ class Performance:
         
         return results
 
-    # def match_chunk(self,
-    #     chunk: Melody,
-    #     direction: Literal["l2r", "r2l"] = "l2r",
-    #     local_tolerance: float = 0.1,
-    #     miss_tolerance: int = 2,
-    #     tolerate_start: bool = True) -> list[Match]:
-    #     """
-    #     Match a chunk of melody events to the most similar MIDI events across the timeline.
-        
-    #     Args:
-    #         chunk: A Melody object containing the sequence of events to match against
-    #         direction: The search direction for building matches. "l2r" for left-to-right, "r2l" for right-to-left.
-    #         local_tolerance: Maximum allowed time difference for individual event matches (seconds)
-    #         miss_tolerance: Maximum allowed number of missed events
-    #         tolerate_start: Whether to tolerate at the start of the search (based on direction)
-    #     """
-    #     if len(chunk) == 0:
-    #         return []
-    #     if len(chunk) == 1:
-    #         tv_list = self.events_by_note[chunk[0].note]
-    #         return [Match([MidiEvent(tv[0], chunk[0].note, tv[1])], 0, 0, 0, 0)
-    #                 for tv in tv_list]
-        
-    #     # Tolerate at the start of the search (head_miss)
-    #     for i in range(miss_tolerance+1):
-    #         if direction == "l2r":
-    #             candidates = self.match_chunk(chunk[i:len(chunk)-1], "l2r", local_tolerance, miss_tolerance, False)
-    #         elif direction == "r2l":
-    #             candidates = self.match_chunk(chunk[1:len(chunk)-i], "r2l", local_tolerance, miss_tolerance, False)
-    #         else:
-    #             raise ValueError(f"Invalid direction: {direction}")
-    #         if not tolerate_start:
-    #             break
-    #         if len(candidates) > 0:
-    #             for c in candidates:
-    #                 c.sum_miss += i
-    #                 c.head_miss = i
-    #             break
-        
-    #     if len(candidates) == 0:
-    #         return []
+    def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
+        from exmel.vis import plot_performance
+        plot_performance(self, save_path, show_plot)
 
-    #     output = []
-    #     for candidate in candidates:
-
-    #         if direction == "l2r":
-    #             melody_shift = chunk[-1] - chunk[-2-candidate.tail_miss]
-    #             predicted_event = candidate.events[-1] + melody_shift
-    #         elif direction == "r2l":
-    #             melody_shift = chunk[0] - chunk[1+candidate.tail_miss]
-    #             predicted_event = candidate.events[0] + melody_shift
-    #         else:
-    #             assert False, "unreachable"
-
-    #         nearest = self.nearest(predicted_event)
-    #         if nearest is not None:
-    #             diff = nearest - predicted_event
-    #             if abs(diff.time) / abs(melody_shift.time) <= local_tolerance:
-
-    #                 if direction == "l2r":
-    #                     candidate.events.append(nearest)
-    #                 elif direction == "r2l":
-    #                     candidate.events.insert(0, nearest)
-    #                 else:
-    #                     assert False, "unreachable"
-
-    #                 candidate.tail_miss = 0
-    #                 candidate.sum_error += abs(diff.time)
-    #             else:
-    #                 candidate.tail_miss += 1
-    #                 candidate.sum_miss += 1
-    #         else:
-    #             # No such note in piano. Maybe the melody is wrong.
-    #             candidate.tail_miss += 1
-    #             # candidate.sum_miss += 1
-    #             # Maybe we can tolerate this note?
-
-    #         if candidate.tail_miss <= miss_tolerance:
-    #             output.append(candidate)
-    #     return output
-
-    # def match(self,
-    #     melody: Melody,
-    #     local_tolerance: float = 0.1,
-    #     miss_tolerance: int = 2,
-    #     tolerate_start: bool = True,
-    #     length_threshold: int = 10) -> Match:
-    #     """
-    #     Match a melody to the most similar MIDI events across the timeline.
-    #     """
-
-    #     raise NotImplementedError("Not implemented")
-
-type PerformanceLike = Performance | Path | Sequence[MidiEvent]
+type PerformanceLike = Performance | PathLike | Iterable[MidiEvent]
