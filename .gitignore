@@ -162,5 +162,5 @@ cython_debug/
 # VSCodeCounter
 .VSCodeCounter/
 
-# Results
-.results/
+results/
+temp/

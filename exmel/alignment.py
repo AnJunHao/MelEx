@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, overload, Literal, Iterable
-import warnings
+from typing import Callable, overload, Literal, Iterable
 from tqdm import tqdm
 
 # from icecream import ic
@@ -8,7 +7,7 @@ from tqdm import tqdm
 from exmel.sequence import Melody, MelodyLike, Performance, PerformanceLike
 from exmel.event import MidiEvent
 from exmel.wisp import weighted_interval_scheduling
-from exmel.score import duration_adjusted_weighted_sum_velocity
+from exmel.score import weighted_sum_velocity
 
 @dataclass
 class Match:
@@ -269,16 +268,16 @@ def scan(
 
 @dataclass
 class AlignConfig:
-    score_func: Callable[[MatchLike], float] = duration_adjusted_weighted_sum_velocity
+    score_func: Callable[[MatchLike], float] = weighted_sum_velocity
     same_key: bool = False
-    same_speed: bool = False
+    same_speed: bool = True
     speed_prior: float = 1.0
     variable_tail: bool = True
     local_tolerance: float = 0.5
     miss_tolerance: int = 2
-    candidate_min_score: float = 10
-    candidate_min_length: int = 15
-    hop_length: int = 2
+    candidate_min_score: float = 8
+    candidate_min_length: int = 10
+    hop_length: int = 8
     split_melody: bool = True
 
 default_config = AlignConfig()
@@ -291,6 +290,14 @@ class Alignment:
     score: float
     sum_miss: int
     sum_error: float
+
+    def __repr__(self) -> str:
+        return f"Alignment(events=[...({len(self.events)} events)...], " \
+               f"matches=[...({len(self.matches)} matches)...], " \
+               f"discarded_matches=[...({len(self.discarded_matches)} discarded matches)...], " \
+               f"score={self.score}, " \
+               f"sum_miss={self.sum_miss}, " \
+               f"sum_error={self.sum_error})"
 
 def align(
     melody: MelodyLike,

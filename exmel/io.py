@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import overload, Literal, Iterable
+from typing import overload, Literal, Iterable, cast
 import mido
 
 from exmel.event import MidiEvent, MelEvent, EventLike
@@ -29,7 +29,7 @@ def load_midi(
     # Track tempo changes and convert ticks to seconds
     tempo = 500000  # Default tempo (120 BPM)
     ticks_per_beat = mid.ticks_per_beat
-    events: list[MidiEvent | MelEvent] = []
+    events: list[MidiEvent] | list[MelEvent] = []
 
     # Get the specified track or all tracks
     if track_idx is None:
@@ -51,8 +51,10 @@ def load_midi(
                 # Convert ticks to seconds using current tempo
                 time_seconds = track_time_ticks * tempo / (ticks_per_beat * 1000000)
                 if include_velocity:
+                    events = cast(list[MidiEvent], events)
                     events.append(MidiEvent(time_seconds, msg.note, msg.velocity))
                 else:
+                    events = cast(list[MelEvent], events)
                     events.append(MelEvent(time_seconds, msg.note))
 
     events.sort(key=lambda x: x.time)
@@ -64,16 +66,25 @@ def load_note(
 ) -> list[MelEvent]:
     with open(note_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    events = []
+    events: list[MelEvent] = []
     for line in lines:
         start, end, note = line.split()
         events.append(MelEvent(float(start), int(note)))
     return events
 
-def save_melody(melody: Iterable[EventLike], path: PathLike) -> None:
+def melody_to_midi(melody: Iterable[EventLike] | PathLike, path: PathLike) -> None:
     
     # Convert to list of events
-    events = list(melody)
+    if isinstance(melody, (Path, str)):
+        melody = Path(melody)
+        if melody.suffix in (".mid", ".midi"):
+            events = load_midi(melody)
+        elif melody.suffix in (".note"):
+            events = load_note(melody)
+        else:
+            raise ValueError(f"Invalid file type: {melody.suffix}")
+    else:
+        events = list(melody)
     
     if not events:
         return
@@ -123,7 +134,36 @@ def save_melody(melody: Iterable[EventLike], path: PathLike) -> None:
     # Save the file
     mid.save(str(path))
 
-def extract_original_events(melody: Iterable[EventLike], original_midi: Path, output_path: Path) -> None:
+def melody_to_note(melody: Iterable[EventLike] | PathLike, path: PathLike) -> None:
+    if isinstance(melody, (Path, str)):
+        melody = Path(melody)
+        if melody.suffix in (".mid", ".midi"):
+            events = load_midi(melody)
+        elif melody.suffix in (".note"):
+            events = load_note(melody)
+        else:
+            raise ValueError(f"Invalid file type: {melody.suffix}")
+    else:
+        events = list(melody)
+    
+    with open(path, "w", encoding="utf-8") as f:
+        for i, event in enumerate(events):
+            # Calculate note duration (until next event or default)
+            if i < len(events) - 1:
+                duration = events[i + 1].time - event.time
+            else:
+                duration = 1.0  # Default duration for last note
+            
+            # Write in format: start end note
+            end_time = event.time + duration
+            f.write(f"{event.time} {end_time} {event.note}\n")
+
+def extract_original_events(
+    melody: Iterable[EventLike] | PathLike,
+    original_midi: PathLike,
+    output_path: PathLike,
+    time_tolerance: float = 0.001,
+) -> None:
     """
     Extract original MIDI events from a MIDI file based on an extracted melody.
     
@@ -137,7 +177,16 @@ def extract_original_events(melody: Iterable[EventLike], original_midi: Path, ou
         output_path: Path where to save the extracted MIDI file
     """
     # Convert to list of events
-    events = list(melody)
+    if isinstance(melody, (Path, str)):
+        melody = Path(melody)
+        if melody.suffix in (".mid", ".midi"):
+            events = load_midi(melody)
+        elif melody.suffix in (".note"):
+            events = load_note(melody)
+        else:
+            raise ValueError(f"Invalid file type: {melody.suffix}")
+    else:
+        events = list(melody)
     
     if not events:
         return
@@ -188,7 +237,6 @@ def extract_original_events(melody: Iterable[EventLike], original_midi: Path, ou
     
     # For each melody event, find the corresponding original events
     selected_events = []
-    time_tolerance = 0.001  # 1ms tolerance for timing matching
     
     for mel_event in events:
         # Find the original note_on event that matches this melody event

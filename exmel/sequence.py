@@ -7,7 +7,10 @@ import warnings
 import statistics
 
 from exmel.event import MelEvent, MidiEvent, EventLike
-from exmel.io import load_midi, load_note, PathLike, save_melody
+from exmel.io import (
+    load_midi, load_note, PathLike,
+    melody_to_midi, extract_original_events, melody_to_note
+)
 
 class Melody:
 
@@ -31,46 +34,22 @@ class Melody:
             self.events = [MelEvent(event.time, event.note) for event in source]
         else:
             raise TypeError(f"Invalid source type: {type(source)}")
-    
-    def _load_midi(self, midi_file: Path, track_idx: int | None = None) -> None:
-        """
-        Load the MIDI file and convert ticks to seconds, then sort events by time.
-        """
-        mid = mido.MidiFile(midi_file)
-        
-        # Track tempo changes and convert ticks to seconds
-        tempo = 500000  # Default tempo (120 BPM)
-        ticks_per_beat = mid.ticks_per_beat
-        events = []
-        
-        # Convert ticks to seconds for all tracks
-        if track_idx is None:
-            iter_tracks = mid.tracks
-        else:
-            iter_tracks = [mid.tracks[track_idx]]
-        for track in iter_tracks:
-            track_time_ticks = 0
-            for msg in track:
-                track_time_ticks += msg.time
-                
-                # Handle tempo changes
-                if msg.type == 'set_tempo':
-                    tempo = msg.tempo
-                
-                if msg.type == 'note_on' and msg.velocity > 0:  # Note onset
-                    # Convert ticks to seconds using current tempo
-                    time_seconds = track_time_ticks * tempo / (ticks_per_beat * 1000000)
-                    events.append(MelEvent(time_seconds, msg.note))
-        
-        events.sort(key=lambda x: x.time)
-        self.events = events
 
-    def __xor__(self, shift: int) -> "Melody":
+    def _build_indices(self) -> None:
+        self.events_by_note: dict[int, list[MelEvent]] = {}
+        for event in self.events:
+            if event.note not in self.events_by_note:
+                self.events_by_note[event.note] = []
+            self.events_by_note[event.note].append(event)
+        for note in self.events_by_note:
+            self.events_by_note[note].sort(key=lambda x: x.time)
+
+    def __xor__(self, note_shift: int) -> "Melody":
         """
         Shift the melody by a number of semitones.
         """
-        if isinstance(shift, int):
-            return Melody([event ^ shift for event in self.events])
+        if isinstance(note_shift, int):
+            return Melody([event ^ note_shift for event in self.events])
         return NotImplemented
     
     def __lshift__(self, time_shift: float) -> "Melody":
@@ -131,10 +110,39 @@ class Melody:
     def __iter__(self) -> Iterator[MelEvent]:
         return iter(self.events)
 
-    def nearest(self, time: float) -> MelEvent:
+    def nearest(self, reference: EventLike) -> MelEvent | None:
         """
         Find the nearest event to the given time.
+        When given an EventLike, finds the nearest event with the same note.
         """
+        # Build indices if not already built
+        if not hasattr(self, 'events_by_note'):
+            self._build_indices()
+        
+        # Find the nearest event with the same note using indices
+        note = reference.note
+        ref_time = reference.time
+        
+        if note not in self.events_by_note:
+            # If no events with this note, fall back to nearest by time only
+            return None
+        
+        # Use binary search on the sorted events for this note
+        note_events = self.events_by_note[note]
+        idx = bisect.bisect_left(note_events, ref_time, key=lambda x: x.time)
+        
+        candidates = []
+        if idx > 0:
+            candidates.append(idx - 1)
+        if idx < len(note_events):
+            candidates.append(idx)
+        
+        # Find the nearest by absolute time difference
+        return note_events[min(candidates, key=lambda i: abs(note_events[i].time - ref_time))]
+
+    def nearest_global(self, time: float) -> MelEvent | None:
+        if len(self.events) == 0:
+            return None
         idx = bisect.bisect_left(self.events, time, key=lambda x: x.time)
         candidates = []
         if idx > 0:
@@ -147,12 +155,18 @@ class Melody:
     def duration(self) -> float:
         return self.events[-1].time - self.events[0].time
 
-    def save(self, path: PathLike) -> None:
-        save_melody(self.events, path)
+    def to_midi(self, path: PathLike, original_midi: PathLike | None = None) -> None:
+        if original_midi is not None:
+            extract_original_events(self.events, original_midi, path)
+        else:
+            melody_to_midi(self.events, path)
 
-    def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
-        from exmel.vis import plot_melody
-        plot_melody(self, save_path, show_plot)
+    def to_note(self, path: PathLike) -> None:
+        melody_to_note(self.events, path)
+
+    def plot(self, save_path: PathLike | None = None, show_plot: bool = True, show_splits: bool = False, split_threshold: float = 16) -> None:
+        from exmel.eval import plot_melody
+        plot_melody(self, save_path, show_plot, show_splits, split_threshold)
 
     def diff(self) -> list[float]:
         return [self[i+1].time - self[i].time for i in range(len(self)-1)]
@@ -419,7 +433,7 @@ class Performance:
         return results
 
     def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
-        from exmel.vis import plot_performance
+        from exmel.eval import plot_performance
         plot_performance(self, save_path, show_plot)
 
     def between(self, from_: MelEvent, to_: MelEvent) -> list[MidiEvent]:
@@ -464,5 +478,79 @@ class Performance:
             results.append(MidiEvent(times[i], note, velocities[i]))
         
         return results
+
+    def __xor__(self, note_shift: int) -> "Performance":
+        """
+        Shift all notes in the performance by a given number of semitones.
+        """
+        if isinstance(note_shift, int):
+            shifted_events = [e ^ note_shift for e in self.global_events]
+            return Performance(shifted_events)
+        return NotImplemented
+    
+    def __rshift__(self, time_shift: float) -> "Performance":
+        """
+        Shift the performance by a number of seconds (forward in time).
+        """
+        if isinstance(time_shift, (float, int)):
+            shifted_events = [event >> time_shift for event in self.global_events]
+            return Performance(shifted_events)
+        return NotImplemented
+    
+    def __lshift__(self, time_shift: float) -> "Performance":
+        """
+        Shift the performance by a number of seconds (backward in time).
+        """
+        if isinstance(time_shift, (float, int)):
+            shifted_events = [event << time_shift for event in self.global_events]
+            return Performance(shifted_events)
+        return NotImplemented
+    
+    def __mul__(self, time_scale: float) -> "Performance":
+        """
+        Scale the performance by a time factor.
+        """
+        if isinstance(time_scale, (float, int)):
+            scaled_events = [event * time_scale for event in self.global_events]
+            return Performance(scaled_events)
+        return NotImplemented
+    
+    def __truediv__(self, time_scale: float) -> "Performance":
+        """
+        Scale the performance by dividing time by a factor.
+        """
+        if isinstance(time_scale, (float, int)):
+            scaled_events = [event / time_scale for event in self.global_events]
+            return Performance(scaled_events)
+        return NotImplemented
+    
+    def __floordiv__(self, quantize_step: float) -> "Performance":
+        """
+        Quantize the performance to the nearest multiple of quantize_step.
+        """
+        if isinstance(quantize_step, (float, int)):
+            quantized_events = [event // quantize_step for event in self.global_events]
+            return Performance(quantized_events)
+        return NotImplemented
+    
+    def __mod__(self, other: Literal[12]) -> "Performance":
+        """
+        Apply note modulo operation to all events (typically used for octave reduction).
+        """
+        if other == 12:
+            modulo_events = [event % 12 for event in self.global_events]
+            return Performance(modulo_events)
+        elif isinstance(other, int):
+            warnings.warn(f"Modulo by {other} does not make sense. You may want to use 12 instead.")
+            modulo_events = [event % other for event in self.global_events]
+            return Performance(modulo_events)
+        else:
+            return NotImplemented
+
+    def __repr__(self) -> str:
+        if len(self.global_events) <= 50:
+            return f"Performance([{', '.join([event.__repr__() for event in self.global_events])}])"
+        else:
+            return f"Performance([{self.global_events[0]}, ...({len(self.global_events) - 2} events)..., {self.global_events[-1]}])"
 
 type PerformanceLike = Performance | PathLike | Iterable[MidiEvent]

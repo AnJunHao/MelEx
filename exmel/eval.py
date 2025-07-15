@@ -905,7 +905,7 @@ def display_evaluation_result(result: EvaluationResult, save_path: str | None = 
     if show_plot:
         plt.show()
 
-def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot: bool = True) -> None:
+def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot: bool = True, show_splits: bool = False, split_threshold: float = 16) -> None:
     """
     Plot the melody with a piano roll visualization.
     
@@ -913,6 +913,8 @@ def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot
         melody: Melody to plot
         save_path: Optional path to save the plot
         show_plot: Whether to display the plot interactively
+        show_splits: Whether to show split points on the plot
+        split_threshold: Threshold for splitting (used when show_splits=True)
     """
     melody = Melody(melody)
     events = melody.events
@@ -966,7 +968,7 @@ def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot
     melody_color = '#4169E1'  # Royal Blue
     note_height = 0.8
     
-    # Draw notes
+        # Draw notes
     for event in events:
         # Scale duration based on figure width to ensure visibility
         duration_vis = max(0.05, (end_time - start_time) / 100)
@@ -980,7 +982,25 @@ def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot
             alpha=0.8
         )
         ax.add_patch(rect)
-    
+
+    # Draw split points if requested
+    if show_splits and len(events) > 1:
+        import statistics
+        # Calculate split points using the same logic as Melody.split()
+        diffs = [events[i+1].time - events[i].time for i in range(len(events)-1)]
+        if diffs:  # Only proceed if there are differences to calculate
+            threshold = statistics.geometric_mean(diffs) * split_threshold
+            split_indices = [i+1 for i, d in enumerate(diffs) if d > threshold]
+            
+            # Draw vertical lines at split points
+            for split_idx in split_indices:
+                split_time = events[split_idx].time
+                ax.axvline(x=split_time, color='red', linestyle='--', linewidth=2, alpha=0.7, label='Split Point')
+            
+            # Add legend if there are split points
+            if split_indices:
+                ax.legend(loc='upper right', bbox_to_anchor=(0.98, 0.98))
+
     # Set up y-axis with note names
     note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     
@@ -1025,7 +1045,10 @@ def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot
     ax.set_ylabel('Notes', fontsize=12, fontweight='bold')
     
     # Add title with metadata
-    title = f'Melody Visualization\n'
+    title = f'Melody Visualization'
+    if show_splits:
+        title += f' (with Split Points)'
+    title += f'\n'
     title += f'Duration: {duration:.1f}s, Events: {total_events}, Figure: {figsize[0]:.1f}"x{figsize[1]:.1f}"'
     ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
     
@@ -1035,6 +1058,17 @@ def plot_melody(melody: MelodyLike, save_path: PathLike | None = None, show_plot
     stats_text += f"Duration: {duration:.1f}s\n"
     stats_text += f"Note Range: {min_note}-{max_note}\n"
     stats_text += f"Event Density: {total_events/max(duration, 1):.1f} events/s"
+    
+    # Add split information if showing splits
+    if show_splits and len(events) > 1:
+        import statistics
+        diffs = [events[i+1].time - events[i].time for i in range(len(events)-1)]
+        if diffs:
+            threshold = statistics.geometric_mean(diffs) * split_threshold
+            split_indices = [i+1 for i, d in enumerate(diffs) if d > threshold]
+            split_count = len(split_indices)
+            stats_text += f"\nSplit Points: {split_count}"
+            stats_text += f"\nSplit Threshold: {threshold:.2f}s"
     
     ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
