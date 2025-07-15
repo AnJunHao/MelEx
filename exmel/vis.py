@@ -7,7 +7,7 @@ from matplotlib.figure import Figure
 from dataclasses import dataclass
 
 from exmel.sequence import MelodyLike, Melody, PerformanceLike, Performance
-from exmel.alignment import Alignment, Match
+from exmel.alignment import Alignment, MatchLike
 from exmel.io import PathLike
 
 def plot_alignment(
@@ -162,7 +162,7 @@ def plot_alignment(
                 fn_events.append(gt_original[j])
     
     # Helper function to calculate match statistics
-    def get_match_stats(match: Match):
+    def get_match_stats(match: MatchLike):
         duration = match.end - match.start
         num_events = len(match.events)
         num_misses = match.sum_miss

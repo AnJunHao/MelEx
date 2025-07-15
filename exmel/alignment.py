@@ -14,7 +14,6 @@ from exmel.score import duration_adjusted_weighted_sum_velocity
 class Match:
     events: list[MidiEvent]
     speed: float
-    head_miss: int
     tail_miss: int
     sum_miss: int
     sum_error: float
@@ -55,7 +54,6 @@ class Match:
         return Match(
             events=self.events.copy(),
             speed=self.speed,
-            head_miss=self.head_miss,
             tail_miss=self.tail_miss,
             sum_miss=self.sum_miss,
             sum_error=self.sum_error,
@@ -93,6 +91,8 @@ def scan(
     score_func: Callable[[MatchLike], float],
     same_key: bool,
     same_speed: bool,
+    speed_prior: float,
+    variable_tail: bool,
     local_rel_tolerance: float,
     local_abs_tolerance: float,
     miss_tolerance: int,
@@ -106,6 +106,8 @@ def scan(
     score_func: Callable[[MatchLike], float],
     same_key: bool,
     same_speed: bool,
+    speed_prior: float,
+    variable_tail: bool,
     local_rel_tolerance: float,
     local_abs_tolerance: float,
     miss_tolerance: int,
@@ -118,6 +120,8 @@ def scan(
     score_func: Callable[[MatchLike], float],
     same_key: bool,
     same_speed: bool,
+    speed_prior: float,
+    variable_tail: bool,
     local_rel_tolerance: float,
     local_abs_tolerance: float,
     miss_tolerance: int,
@@ -143,7 +147,7 @@ def scan(
     if not isinstance(performance, Performance):
         performance = Performance(performance)
     
-    #################### Recursive Base Cases ####################
+    #################### Base Cases ####################
     if len(melody) == 0:
         raise ValueError("Melody is empty")
     elif len(melody) == 1:
@@ -152,13 +156,13 @@ def scan(
         if same_key:
             tv_list = performance.events_by_note.get(melody[0].note, [])
             lives = [Match([MidiEvent(tv[0], melody[0].note, tv[1])],
-                            1.0, 0, 0, 0, 0,
+                            speed_prior, 0, 0, 0.0,
                             score_func,
                             melody[0].time, melody[0].time)
                         for tv in tv_list]
         else:
             lives =  [Match([event],
-                            1.0, 0, 0, 0, 0,
+                            speed_prior, 0, 0, 0.0,
                             score_func,
                             melody[0].time, melody[0].time)
                         for event in performance.global_events]
@@ -167,7 +171,7 @@ def scan(
     #################### Recursive Call ####################
     lives, frozens = scan(
         melody[:-1], performance, 
-        score_func, same_key, same_speed,
+        score_func, same_key, same_speed, speed_prior, variable_tail,
         local_rel_tolerance, local_abs_tolerance,
         miss_tolerance, candidate_min_score,
         recursive_call=True)
@@ -216,15 +220,21 @@ def scan(
             tolerance = max(melody_shift.time * candidate.speed * local_rel_tolerance,
                             local_abs_tolerance)
             if abs(diff.time) <= tolerance:
+
                 if not same_speed:
+                    #################### Update Speed ####################
                     actual_shift = nearest - candidate.events[-1]
                     speed_ratio = actual_shift / melody_shift
                     candidate.update_speed_before_append(speed_ratio)
+                
+                #################### Append Event ####################
                 candidate.events.append(nearest)
                 candidate.sum_miss += candidate.tail_miss
                 candidate.tail_miss = 0
                 candidate.sum_error += abs(diff.time)
                 candidate.melody_end = melody[-1].time
+            
+        #################### Update Misses ####################
             else:
                 candidate.tail_miss += 1
         else:
@@ -232,20 +242,28 @@ def scan(
             candidate.tail_miss += 1
             # Maybe we can tolerate this note?
 
+        #################### Prepare Outputs ####################
         if candidate.tail_miss <= miss_tolerance:
             # Add live candidates 
             new_lives.append(candidate)
-            if candidate.tail_miss == 0 and candidate.score >= candidate_min_score:
+
+        #################### Variable Tail ####################
+            if (variable_tail and
+                candidate.tail_miss == 0 and
+                candidate.score >= candidate_min_score):
                 copy = candidate.copy()
                 frozens.append(copy.freeze())
-        elif candidate.score >= candidate_min_score:
-            # good enough candidates -> Freeze
-            # candidate.freeze()
-            # frozens.append(candidate)
-            pass
+        elif not variable_tail and candidate.score >= candidate_min_score:
+            # good enough candidates are already added to frozen if variable_tail
+            # so we only need to freeze when variable_tail is False
+            frozens.append(candidate.freeze())
 
     if not recursive_call:
-        return frozens
+        if variable_tail:
+            return frozens
+        else:
+            frozens.extend(c.freeze() for c in new_lives if c.score >= candidate_min_score)
+            return frozens
 
     return new_lives, frozens
 
@@ -254,6 +272,8 @@ class AlignConfig:
     score_func: Callable[[MatchLike], float] = duration_adjusted_weighted_sum_velocity
     same_key: bool = False
     same_speed: bool = False
+    speed_prior: float = 1.0
+    variable_tail: bool = True
     local_tolerance: float = 0.5
     miss_tolerance: int = 2
     candidate_min_score: float = 10
@@ -295,7 +315,6 @@ def align(
 
     local_abs_tolerance = melody.mean_diff() * config.local_tolerance
 
-    # Calculate total number of scan operations
     total_scans = sum(len(range(0,
                                 len(melody) - config.candidate_min_length,
                                 config.hop_length)) 
@@ -312,6 +331,8 @@ def align(
                     config.score_func,
                     config.same_key,
                     config.same_speed,
+                    config.speed_prior,
+                    config.variable_tail,
                     config.local_tolerance,
                     local_abs_tolerance,
                     config.miss_tolerance,

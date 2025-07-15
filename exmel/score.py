@@ -1,15 +1,12 @@
 from typing import Protocol, Sequence
 from exmel.event import MidiEvent
-from dataclasses import dataclass
 from math import log10
 
 class MatchLike(Protocol):
     @property
     def events(self) -> Sequence[MidiEvent]: ...
-    
     @property
     def sum_miss(self) -> int: ...
-    
     @property
     def sum_error(self) -> float: ...
 

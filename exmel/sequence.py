@@ -2,6 +2,7 @@ from pathlib import Path
 import bisect
 import mido
 from typing import Literal, Iterator, overload, Iterable
+from collections import defaultdict
 import warnings
 import statistics
 
@@ -196,7 +197,10 @@ class Performance:
             self.note_times = source.note_times
             self.note_velocities = source.note_velocities
         elif isinstance(source, Iterable):
-            self.events_by_note = {event.note: [(event.time, event.velocity)] for event in source}
+            self.events_by_note = defaultdict(list)
+            for event in source:
+                self.events_by_note[event.note].append((event.time, event.velocity))
+            self.events_by_note = dict(self.events_by_note)
             self._build_indices()
         else:
             raise TypeError(f"Invalid source type: {type(source)}")

@@ -5,13 +5,11 @@ from typing import Protocol, Sequence
 from dataclasses import dataclass
 from tqdm import tqdm
 
-class Event(Protocol):
+class EventProtocol(Protocol):
     @property
     def start(self) -> float: ...
-    
     @property
     def end(self) -> float: ...
-    
     @property
     def score(self) -> float: ...
 
@@ -19,7 +17,7 @@ def find_last_non_overlapping(ends: Sequence[float], start: float) -> int:
     # Find the last event that ends before start
     return bisect.bisect_right(ends, start) - 1
 
-def weighted_interval_scheduling[T: Event](
+def weighted_interval_scheduling[T: EventProtocol](
     events: Sequence[T],
     verbose: bool = False
     ) -> tuple[float, list[T]]:
