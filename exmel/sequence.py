@@ -1,7 +1,6 @@
 from pathlib import Path
 import bisect
-import mido
-from typing import Literal, Iterator, overload, Iterable
+from typing import Literal, Iterator, overload, Iterable, TypedDict
 from collections import defaultdict
 import warnings
 import statistics
@@ -554,3 +553,23 @@ class Performance:
             return f"Performance([{self.global_events[0]}, ...({len(self.global_events) - 2} events)..., {self.global_events[-1]}])"
 
 type PerformanceLike = Performance | PathLike | Iterable[MidiEvent]
+
+type SongStatKeys = Literal['duration_per_event', 'note_mean_song', 'velocity_mean']
+
+def song_stats(melody: MelodyLike, performance: PerformanceLike) -> dict[SongStatKeys, float]:
+    if not isinstance(melody, Melody):
+        melody = Melody(melody)
+    if not isinstance(performance, Performance):
+        performance = Performance(performance)
+    melodies = melody.split()
+    sum_duration, sum_events = 0, 0
+    for m in melodies:
+        sum_duration += m.duration
+        sum_events += len(m)
+    duration_per_event = sum_duration / sum_events
+    note_mean = statistics.mean(event.note for event in performance.global_events)
+    velocity_mean = statistics.mean(event.velocity for event in performance.global_events)
+    return {
+        'duration_per_event': duration_per_event,
+        'note_mean_song': note_mean,
+        'velocity_mean': velocity_mean}

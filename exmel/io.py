@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import overload, Literal, Iterable, cast
 import mido
+from warnings import warn
 
 from exmel.event import MidiEvent, MelEvent, EventLike
 
@@ -24,7 +25,10 @@ def load_midi(
     include_velocity: bool = True,
 ) -> list[MidiEvent] | list[MelEvent]:
 
-    mid = mido.MidiFile(midi_file)
+    try:
+        mid = mido.MidiFile(midi_file)
+    except OSError as e:
+        raise OSError(f"Error loading MIDI file: {midi_file}") from e
         
     # Track tempo changes and convert ticks to seconds
     tempo = 500000  # Default tempo (120 BPM)
@@ -76,6 +80,7 @@ def melody_to_midi(melody: Iterable[EventLike] | PathLike, path: PathLike) -> No
     
     # Convert to list of events
     if isinstance(melody, (Path, str)):
+        mel_path = melody
         melody = Path(melody)
         if melody.suffix in (".mid", ".midi"):
             events = load_midi(melody)
@@ -84,9 +89,14 @@ def melody_to_midi(melody: Iterable[EventLike] | PathLike, path: PathLike) -> No
         else:
             raise ValueError(f"Invalid file type: {melody.suffix}")
     else:
+        mel_path = None
         events = list(melody)
     
     if not events:
+        if mel_path is not None:
+            warn(f"No event in {mel_path}, not saving to {path}")
+        else:
+            warn(f"No event in melody, not saving to {path}")
         return
     
     # Create MIDI file

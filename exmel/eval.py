@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from exmel.sequence import MelodyLike, Melody, PerformanceLike, Performance
 from exmel.alignment import Alignment, MatchLike
+from exmel.event import MelEvent
 from exmel.io import PathLike
 
 def plot_alignment(
@@ -633,6 +634,73 @@ class EvaluationResult:
     plot: Figure | None = None
 
 def evaluate_melody(
+    gt: MelodyLike,
+    pred: MelodyLike,
+    tolerance: float = 0.1,
+    modulo: bool = True,
+    plot: bool = True,
+    save_path: PathLike | None = None,
+) -> EvaluationResult:
+    """
+    Evaluate the accuracy of a predicted melody against a ground truth melody.
+    Creates a piano roll visualization with color coding for tp/fp/fn.
+    
+    Args:
+        gt: Ground truth melody
+        pred: Predicted melody
+        tolerance: Time tolerance for matching notes (seconds)
+        modulo: Whether to use modulo 12 for note matching
+        plot: Whether to plot the evaluation result
+        save_path: Optional path to save the visualization plot
+    """
+    gt = Melody(gt)
+    pred = Melody(pred)
+
+    if modulo:
+        gt %= 12
+        pred %= 12
+    
+    # Track which notes are tp, fp, fn for visualization
+    tp_notes: list[MelEvent] = []
+    fp_notes: list[MelEvent] = []
+    fn_notes: list[MelEvent] = []
+    
+    # Find true positives and mark matched gt notes
+    matched_gt_indices = set()
+    for p_event in pred:
+        nearest = gt.nearest(p_event)
+        if nearest is not None:
+            if abs(p_event.time - nearest.time) <= tolerance:
+                tp_notes.append(p_event)
+            else:
+                fp_notes.append(p_event)
+        else:
+            fp_notes.append(p_event)
+    
+    # Find false negatives (unmatched gt notes)
+    for g_event in gt:
+        nearest = pred.nearest(g_event)
+        if nearest is None or abs(g_event.time - nearest.time) > tolerance:
+            fn_notes.append(g_event)
+    
+    # Calculate metrics
+    tp = len(tp_notes)
+    fp = len(fp_notes)
+    fn = len(fn_notes)
+    
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    
+    # Create piano roll visualization
+    if plot:
+        fig = _create_evaluation_piano_roll(tp_notes, fp_notes, fn_notes, gt, pred, save_path=save_path)
+    else:
+        fig = None
+    
+    return EvaluationResult(tp, fp, fn, precision, recall, f1_score, fig)
+
+def _evaluate_melody(
     gt: MelodyLike,
     pred: MelodyLike,
     tolerance: float = 0.1,

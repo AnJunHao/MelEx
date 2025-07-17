@@ -1,13 +1,13 @@
 from dataclasses import dataclass, field
 from typing import Callable, overload, Literal, Iterable
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 # from icecream import ic
 
-from exmel.sequence import Melody, MelodyLike, Performance, PerformanceLike
+from exmel.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
 from exmel.event import MidiEvent
 from exmel.wisp import weighted_interval_scheduling
-from exmel.score import weighted_sum_velocity
+from exmel.score import ScoreModel, MelodicsModel
 
 @dataclass
 class Match:
@@ -32,8 +32,13 @@ class Match:
     def score(self) -> float:
         return self.score_func(self)
 
-    def freeze(self) -> 'FrozenMatch':
-        return FrozenMatch(
+    def freeze(self, defer_score=False) -> 'FrozenMatch':
+        if defer_score:
+            score = float("-inf")
+        else:
+            score = self.score
+
+        frozen_match = FrozenMatch(
             events=tuple(self.events),
             speed=self.speed,
             sum_miss=self.sum_miss,
@@ -42,8 +47,9 @@ class Match:
             melody_end=self.melody_end,
             start=self.events[0].time,
             end=self.events[-1].time,
-            score=self.score_func(self)
-        )
+            score=score)
+        
+        return frozen_match
 
     def update_speed_before_append(self, speed: float) -> None:
         current_sum = self.speed * len(self.events)
@@ -76,6 +82,19 @@ class FrozenMatch:
     end: float = field(hash=True)
     score: float = field(hash=True)
 
+    def update_score(self, score: float) -> 'FrozenMatch':
+        return FrozenMatch(
+            events=self.events,
+            speed=self.speed,
+            sum_miss=self.sum_miss,
+            sum_error=self.sum_error,
+            melody_start=self.melody_start,
+            melody_end=self.melody_end,
+            start=self.start,
+            end=self.end,
+            score=score
+        )
+
 type MatchLike = Match | FrozenMatch
 
 def concat_matches(matches: Iterable[MatchLike]) -> list[MidiEvent]:
@@ -95,7 +114,8 @@ def scan(
     local_rel_tolerance: float,
     local_abs_tolerance: float,
     miss_tolerance: int,
-    candidate_min_score: float,
+    candidate_min_score: float | None,
+    candidate_min_length: int,
     recursive_call: Literal[False]
 ) -> list[FrozenMatch]: ...
 @overload
@@ -110,7 +130,8 @@ def scan(
     local_rel_tolerance: float,
     local_abs_tolerance: float,
     miss_tolerance: int,
-    candidate_min_score: float,
+    candidate_min_score: float | None   ,
+    candidate_min_length: int,
     recursive_call: Literal[True]
 ) -> tuple[list[Match], list[FrozenMatch]]: ...
 def scan(
@@ -124,7 +145,8 @@ def scan(
     local_rel_tolerance: float,
     local_abs_tolerance: float,
     miss_tolerance: int,
-    candidate_min_score: float,
+    candidate_min_score: float | None,
+    candidate_min_length: int,
     recursive_call: bool = False
 ) -> list[FrozenMatch] | tuple[list[Match], list[FrozenMatch]]:
     """
@@ -172,7 +194,7 @@ def scan(
         melody[:-1], performance, 
         score_func, same_key, same_speed, speed_prior, variable_tail,
         local_rel_tolerance, local_abs_tolerance,
-        miss_tolerance, candidate_min_score,
+        miss_tolerance, candidate_min_score, candidate_min_length,
         recursive_call=True)
 
     if len(lives) == 0:
@@ -249,38 +271,43 @@ def scan(
         #################### Variable Tail ####################
             if (variable_tail and
                 candidate.tail_miss == 0 and
-                candidate.score >= candidate_min_score):
+                (candidate_min_score is None or candidate.score >= candidate_min_score) and
+                len(candidate) >= candidate_min_length):
                 copy = candidate.copy()
-                frozens.append(copy.freeze())
-        elif not variable_tail and candidate.score >= candidate_min_score:
+                frozens.append(copy.freeze(defer_score=candidate_min_score is None))
+        elif (not variable_tail and
+              (candidate_min_score is None or candidate.score >= candidate_min_score) and
+              len(candidate) >= candidate_min_length):
             # good enough candidates are already added to frozen if variable_tail
             # so we only need to freeze when variable_tail is False
-            frozens.append(candidate.freeze())
+            frozens.append(candidate.freeze(defer_score=candidate_min_score is None))
 
     if not recursive_call:
         if variable_tail:
             return frozens
         else:
-            frozens.extend(c.freeze() for c in new_lives if c.score >= candidate_min_score)
+            frozens.extend(
+                c.freeze(defer_score=candidate_min_score is None)
+                for c in new_lives
+                if len(c) >= candidate_min_length and
+                   (candidate_min_score is None or c.score >= candidate_min_score))
             return frozens
 
     return new_lives, frozens
 
 @dataclass
 class AlignConfig:
-    score_func: Callable[[MatchLike], float] = weighted_sum_velocity
+    score_model: ScoreModel = field(default_factory=MelodicsModel)
     same_key: bool = False
     same_speed: bool = True
     speed_prior: float = 1.0
     variable_tail: bool = True
     local_tolerance: float = 0.5
     miss_tolerance: int = 2
-    candidate_min_score: float = 8
+    candidate_min_score: float = 7
     candidate_min_length: int = 10
     hop_length: int = 8
     split_melody: bool = True
-
-default_config = AlignConfig()
 
 @dataclass(frozen=True, slots=True)
 class Alignment:
@@ -299,12 +326,32 @@ class Alignment:
                f"sum_miss={self.sum_miss}, " \
                f"sum_error={self.sum_error})"
 
+@overload
 def align(
     melody: MelodyLike,
     performance: PerformanceLike,
-    config: AlignConfig = default_config,
+    config: AlignConfig,
+    defer_score: bool = True,
     verbose: bool = True,
-) -> Alignment:
+    skip_wisp: Literal[False] = False
+) -> Alignment: ...
+@overload
+def align(
+    melody: MelodyLike,
+    performance: PerformanceLike,
+    config: AlignConfig,
+    defer_score: bool = True,
+    verbose: bool = True,
+    skip_wisp: Literal[True] = True
+) -> list[FrozenMatch]: ...
+def align(
+    melody: MelodyLike,
+    performance: PerformanceLike,
+    config: AlignConfig,
+    defer_score: bool = True,
+    verbose: bool = True,
+    skip_wisp: bool = False
+) -> Alignment | list[FrozenMatch]:
 
     if config.hop_length < 1:
         raise ValueError("hop_length must be at least 1")
@@ -314,6 +361,8 @@ def align(
         performance = Performance(performance)
 
     candidates: list[FrozenMatch] = []
+
+    config.score_model.load_song_stats(song_stats(melody, performance))
 
     if config.split_melody:
         melodies = melody.split()
@@ -335,7 +384,7 @@ def align(
                 candidates.extend(scan(
                     melody[scan_start:],
                     performance,
-                    config.score_func,
+                    config.score_model,
                     config.same_key,
                     config.same_speed,
                     config.speed_prior,
@@ -343,14 +392,27 @@ def align(
                     config.local_tolerance,
                     local_abs_tolerance,
                     config.miss_tolerance,
-                    config.candidate_min_score,
+                    None if defer_score else config.candidate_min_score,
+                    config.candidate_min_length,
                     recursive_call=False))
                 pbar.update(1)
     
     if len(candidates) == 0:
         return Alignment([], [], [], 0, 0, 0)
 
-    opt_score, opt_subset = weighted_interval_scheduling(candidates, verbose=False)
+    if skip_wisp:
+        return candidates
+
+    if defer_score:
+        scores = config.score_model(candidates)
+        updated_candidates: list[FrozenMatch] = []
+        for candidate, score in zip(candidates, scores):
+            if score >= config.candidate_min_score:
+                updated_candidates.append(candidate.update_score(score))
+        candidates = updated_candidates
+
+    opt_score, opt_subset = weighted_interval_scheduling(
+        candidates, return_subset=True, verbose=False)
     discarded_matches = [match for match in candidates if match not in opt_subset]
     concat_events = concat_matches(opt_subset)
     return Alignment(concat_events, opt_subset, discarded_matches, opt_score,

@@ -1,0 +1,31 @@
+Dataset Summary
+===============
+
+Total songs: 18
+
+Songs included:
+- Monsters (by 周深)
+- 骂醒我 (by 周汤豪)
+- 篇章 (by 张韶涵、王赫野)
+- 墨雨云间 (by 井胧、井迪儿)
+- 身骑白马 (by 张杰)
+- 喜欢你 (by 邓紫棋)
+- This is Love (by 周兴哲)
+- 月光 (by 周深)
+- 喜帖街 (by 陈奕迅)
+- 至少我还记得 (by 周兴哲)
+- 月牙湾 (by F.I.R.)
+- 平行世界 (by G.E.M.邓紫棋)
+- 痴情冢 (by 邓伦)
+- 我的秘密 (by 邓紫棋)
+- 如果能幸福 (by 周兴哲)
+- 预言书 (by 关智斌)
+- 永不失联的爱 (by 周兴哲)
+- 再回首 (by 姜育恒)
+
+File naming convention:
+- {song_name}.m.mid     - Melody annotations
+- {song_name}.x.mid   - Transcribed MIDI
+- {song_name}.gt.mid       - Ground truth MIDI
+- {song_name}.bl.mid        - Baseline MIDI
+- {song_name}.{ext}         - Audio files (if available)

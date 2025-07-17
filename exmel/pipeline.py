@@ -4,11 +4,11 @@ import pandas as pd
 import time
 from datetime import datetime
 import json
+from functools import cache
 from typing import Literal, NamedTuple, Iterator
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from exmel.alignment import AlignConfig, align, Alignment
-from exmel.score import duration_adjusted_weighted_sum_velocity
 from exmel.io import PathLike, extract_original_events
 from exmel.sequence import Melody, Performance
 from exmel.eval import evaluate_melody, plot_alignment
@@ -44,8 +44,18 @@ class Dataset:
     def __len__(self):
         return len(self.song_dirs)
 
-    def __getitem__(self, index: int) -> Song:
-        song_dir = self.song_dirs[index]
+    @cache
+    def __getitem__(self, query: int | str) -> Song:
+        # Handle string queries by finding the song with that name
+        if isinstance(query, str):
+            for i, song_dir in enumerate(self.song_dirs):
+                if song_dir.name == query:
+                    return self[i]
+            else:
+                raise KeyError(f"Song '{query}' not found in dataset")
+
+        # Handle integer queries (existing behavior)
+        song_dir = self.song_dirs[query]
         song_name = song_dir.name
         
         # Required files
@@ -179,7 +189,7 @@ def eval_pipeline(
         start_time = time.time()
         # Convert verbose level to boolean for align function
         # verbose=2,3 show per-song progress bars, verbose=0,1 don't
-        alignment = align(song.melody, song.performance, config, verbose=(verbose>=2))
+        alignment = align(song.melody, song.performance, config, defer_score=True, verbose=(verbose>=2))
         end_time = time.time()
         runtime = end_time - start_time
         
@@ -361,30 +371,3 @@ def eval_pipeline(
     
     return df
 
-
-# Example usage (keeping the original test case)
-if __name__ == "__main__":
-    config = AlignConfig(
-        score_func=duration_adjusted_weighted_sum_velocity,
-        same_key=False,
-        same_speed=False,
-        speed_prior=1.0,
-        variable_tail=True,
-        local_tolerance=0.5,
-        miss_tolerance=2,
-        candidate_min_score=8,
-        candidate_min_length=10,
-        hop_length=2,
-        split_melody=True
-    )
-    
-    # Run the evaluation pipeline
-    results_df = eval_pipeline(
-        config=config,
-        dataset="dataset",
-        save_plot=True,
-        save_csv=True,
-        result_dir=None,  # Will create timestamped directory
-        baseline=True,
-        verbose=3
-    )
