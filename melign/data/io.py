@@ -8,7 +8,7 @@ from melign.data.event import MidiEvent, MelEvent, EventLike
 type PathLike = Path | str
 
 @overload
-def load_midi(
+def load_midi(  # type: ignore[reportOverlappingOverload]
     midi_file: PathLike,
     track_idx: int | None = None,
     include_velocity: Literal[True] = True,

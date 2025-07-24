@@ -4,169 +4,62 @@ import pandas as pd
 import time
 from datetime import datetime
 import json
-from typing import Literal, Iterator, Iterable, overload, TypedDict
+from typing import Literal
 from tqdm.auto import tqdm
-from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import warnings
 
 from melign.align.alignment import AlignConfig, align, Alignment
 from melign.data.io import PathLike, extract_original_events
-from melign.data.sequence import Melody, Performance
 from melign.align.eval_and_vis import evaluate_melody, plot_alignment
+from melign.api.dataset import Dataset, DatasetLike, Song
 
-@dataclass(frozen=True, slots=True)
-class Song:
-    name: str
-    melody: Melody
-    performance: Performance
-    performance_path: Path
-    ground_truth: Melody | None
-    baseline: Melody | None
-    audio_path: Path | None
-
-class DatasetConfig(TypedDict):
-    melody_ext: str | Iterable[str]
-    performance_ext: str | Iterable[str]
-    ground_truth_ext: str | Iterable[str]
-    ground_truth_track_idx: int | None
-    baseline_ext: str | Iterable[str]
-    baseline_track_idx: int | None
-    audio_ext: str | Iterable[str]
-
-default_extensions: DatasetConfig = {
-    "melody_ext": (".m.mid", ".note", ".est.note"),
-    "performance_ext": ".t.mid",
-    "ground_truth_ext": ".gt.mid",
-    "ground_truth_track_idx": 3,
-    "baseline_ext": ".bl.mid",
-    "baseline_track_idx": 3,
-    "audio_ext": (".mp3", ".opus"),
-}
-
-class Dataset:
+def _process_single_song(args: tuple[Song, AlignConfig, bool, bool, bool, bool, PathLike | None]):
     """
-    A dataset of songs, organized in this structure:
+    Process a single song for parallel execution.
+    Returns all the data needed for the main thread to handle I/O and aggregation.
+    """
+    # Unpack arguments
+    (
+        song, config, baseline, verbose_per_song,
+        save_mid, save_plot, result_dir
+    ) = args
     
-    dataset/
-    ├── song one/
-    │   ├── song one.m.mid (required: reference melody)
-    │   ├── song one.t.mid (required: piano transcription)
-    │   ├── song one.gt.mid (optional: ground truth)
-    │   └── song one.bl.mid (optional: baseline)
-    ├── song two/
-    │   └── ... (files for <song two>)
-    └── ... (other song directories)
-    """
-    def __init__(
-        self,
-        source: 'DatasetLike',
-        extensions: DatasetConfig = default_extensions,
-    ):
-        self.extensions = extensions
-        if isinstance(source, Dataset):
-            self.song_dirs = [d for d in source.song_dirs]
-        elif isinstance(source, (Path, str)):
-            self.song_dirs = [d for d in Path(source).iterdir() if d.is_dir()]
-        elif isinstance(source, Iterable):
-            self.song_dirs = [Path(d) for d in source]
-        if len(self.song_dirs) == 0:
-            raise FileNotFoundError(f"No directories found in {source}")
+    # Time the alignment operation
+    start_time = time.time()
+    alignment = align(song.melody, song.performance, config, defer_score=True, verbose=verbose_per_song)
+    end_time = time.time()
+    runtime = end_time - start_time
+    
+    # Evaluate alignment
+    assert song.ground_truth is not None, f"Ground truth file for <{song.name}> not found"
+    result_alignment = evaluate_melody(song.ground_truth, alignment.events, plot=False)
+    
+    # Evaluate baseline if requested
+    result_baseline = None
+    if baseline:
+        assert song.baseline is not None, f"Baseline file for <{song.name}> not found"
+        result_baseline = evaluate_melody(song.ground_truth, song.baseline, plot=False)
+    
+    # Handle file I/O operations (parallel-safe, unique filenames)
+    if result_dir is not None:
+        if save_mid:
+            extract_original_events(
+                alignment.events,
+                song.performance_path,
+                Path(result_dir) / f"{song.name}.mid")
+        if save_plot:
+            plot_alignment(alignment, song.melody, song.performance, 
+                           song.ground_truth, Path(result_dir) / f"{song.name}_align.png")
+    
+    return {
+        'song': song,
+        'alignment': alignment,
+        'result_alignment': result_alignment,
+        'result_baseline': result_baseline,
+        'runtime': runtime
+    }
 
-    def _get_file_path(self, song_dir: Path, song_name: str, ext: str | Iterable[str]) -> Path | None:
-        if isinstance(ext, str):
-            ext = [ext]
-        for e in ext:
-            if (song_dir / f"{song_name}{e}").exists():
-                return song_dir / f"{song_name}{e}"
-        return None
-
-    def __len__(self):
-        return len(self.song_dirs)
-
-    @overload
-    def __getitem__(self, query: int | str) -> Song: ...
-    @overload
-    def __getitem__(self, query: slice | Iterable[str]) -> 'Dataset': ...
-    def __getitem__(self, query: int | str | slice | Iterable[str]) -> 'Song | Dataset':
-        # Handle string queries by finding the song with that name
-        if isinstance(query, str):
-            for i, song_dir in enumerate(self.song_dirs):
-                if song_dir.name == query:
-                    return self[i]
-            else:
-                raise KeyError(f"Song '{query}' not found in dataset")
-        if isinstance(query, slice):
-            return Dataset(self.song_dirs[query])
-        if isinstance(query, Iterable):
-            return Dataset([dir_ for dir_ in self.song_dirs if dir_.name in query])
-
-        # Handle integer queries (existing behavior)
-        song_dir = self.song_dirs[query]
-        song_name = song_dir.name
-        
-        # Required files
-        melody_path = self._get_file_path(song_dir, song_name, self.extensions["melody_ext"])
-        performance_path = self._get_file_path(song_dir, song_name, self.extensions["performance_ext"])
-        
-        if melody_path is None:
-            raise FileNotFoundError(f"Required melody file not found: {melody_path}")
-        if performance_path is None:
-            raise FileNotFoundError(f"Required performance file not found: {performance_path}")
-        
-        melody = Melody(melody_path)
-        performance = Performance(performance_path)
-        
-        # Optional files - create objects only if files exist
-        ground_truth_path = self._get_file_path(song_dir, song_name, self.extensions["ground_truth_ext"])
-        if ground_truth_path is not None:
-            ground_truth = Melody(ground_truth_path, track_idx=self.extensions["ground_truth_track_idx"])
-        else:
-            ground_truth = None
-        
-        baseline_path = self._get_file_path(song_dir, song_name, self.extensions["baseline_ext"])
-        if baseline_path is not None:
-            baseline = Melody(baseline_path, track_idx=self.extensions["baseline_track_idx"])
-        else:
-            baseline = None
-        
-        audio_path = self._get_file_path(song_dir, song_name, self.extensions["audio_ext"])
-        if audio_path is not None:
-            audio_path = Path(audio_path)
-        else:
-            audio_path = None
-        
-        return Song(song_name, melody, performance, performance_path, ground_truth, baseline, audio_path)
-
-    def __iter__(self) -> Iterator[Song]:
-        for i in range(len(self)):
-            yield self[i]
-
-    def __repr__(self) -> str:
-        return f"Dataset(source={self.song_dirs.__repr__()})"
-
-    def is_full(self) -> bool:
-        if not self.is_valid():
-            return False
-        for song_dir in self.song_dirs:
-            song_name = song_dir.name
-            if (
-                self._get_file_path(song_dir, song_name, self.extensions["ground_truth_ext"]) is None or
-                self._get_file_path(song_dir, song_name, self.extensions["baseline_ext"]) is None or
-                self._get_file_path(song_dir, song_name, self.extensions["audio_ext"]) is None
-            ):
-                return False
-        return True
-
-    def is_valid(self) -> bool:
-        for song_dir in self.song_dirs:
-            song_name = song_dir.name
-            if (
-                self._get_file_path(song_dir, song_name, self.extensions["melody_ext"]) is None or
-                self._get_file_path(song_dir, song_name, self.extensions["performance_ext"]) is None
-            ):
-                return False
-        return True
-
-type DatasetLike = Dataset | PathLike | Iterable[PathLike]
 
 def inference_pipeline(
     config: AlignConfig,
@@ -202,7 +95,8 @@ def eval_pipeline(
     save_csv: bool = False,
     save_mid: bool = False,
     baseline: bool = True,
-    verbose: Literal[0, 1, 2, 3] = 1
+    verbose: Literal[0, 1, 2, 3] = 1,
+    n_jobs: int = 1
 ) -> tuple[pd.DataFrame, dict[str, Alignment]]:
     """
     Evaluate alignment pipeline on a dataset.
@@ -221,11 +115,20 @@ def eval_pipeline(
             1: single progress bar for all songs, nothing else,
             2: per-song progress bar (from align function), no overall progress,
             3: full detail including per-song progress bar
+        n_jobs: Number of parallel jobs to run (1 for sequential processing)
+        executor_type: Type of executor to use for parallel processing
+            "process": ProcessPoolExecutor - uses separate processes, bypasses GIL, 
+                      best for CPU-bound alignment tasks (recommended)
+            "thread": ThreadPoolExecutor - uses threads, limited by GIL,
+                     only useful if align() releases GIL (e.g., calls C extensions)
         
     Returns:
         DataFrame with evaluation results for each sample
     """
-    # Create dataset object
+    if n_jobs > 1 and verbose >= 2:
+        warnings.warn("Parallel processing is not supported with verbose >= 2 (per task progress bar), setting verbose to 1")
+        verbose = 1
+
     dataset = Dataset(dataset)
     
     # Only create result directory if any save operation is needed
@@ -257,71 +160,119 @@ def eval_pipeline(
     # Dictionary to store alignment results
     alignment_dict: dict[str, Alignment] = {}
     
-    # Initialize progress bar for verbose=1 (single progress bar for all songs)
-    overall_pbar = None
-    if verbose == 1:
-        overall_pbar = tqdm(total=len(dataset), desc="Processing songs")
+    # Convert verbose level to boolean for per-song progress (verbose=2,3 show per-song progress bars)
+    verbose_per_song = (verbose >= 2)
     
-    for i, song in enumerate(dataset):
-        if verbose == 3:
-            print(f"Aligning <{song.name}> ({i+1}/{len(dataset)})...")
+    if n_jobs == 1:
+        # Sequential processing (original behavior)
+        # Initialize progress bar for verbose=1 (single progress bar for all songs)
+        overall_pbar = None
+        if verbose == 1:
+            overall_pbar = tqdm(total=len(dataset), desc=f"Processing songs (n_jobs={n_jobs})")
         
-        # Time the alignment operation
-        start_time = time.time()
-        # Convert verbose level to boolean for align function
-        # verbose=2,3 show per-song progress bars, verbose=0,1 don't
-        alignment = align(song.melody, song.performance, config, defer_score=True, verbose=(verbose>=2))
-        end_time = time.time()
-        runtime = end_time - start_time
-
-        alignment_dict[song.name] = alignment
+        for i, song in enumerate(dataset):
+            if verbose == 3:
+                print(f"Aligning <{song.name}> ({i+1}/{len(dataset)})...")
+            
+            # Process song
+            result = _process_single_song((song, config, baseline, verbose_per_song, save_mid, save_plot, result_dir))
+            
+            # Store results
+            alignment_dict[song.name] = result['alignment']
+            alignment_results.append(result['result_alignment'])
+            if baseline and result['result_baseline'] is not None:
+                baseline_results.append(result['result_baseline'])
+            sample_names.append(song.name)
+            alignment_runtimes.append(result['runtime'])
+            
+            # Print results if verbose=3 (full detail)
+            if verbose == 3:
+                if baseline and result['result_baseline'] is not None:
+                    baseline_res = result['result_baseline']
+                    print(f"Baseline: {baseline_res.precision*100:.1f}% {baseline_res.recall*100:.1f}% {baseline_res.f1_score*100:.1f}%")
+                alignment_res = result['result_alignment']
+                print(f"Alignment: {alignment_res.precision*100:.1f}% {alignment_res.recall*100:.1f}% {alignment_res.f1_score*100:.1f}%")
+                print(f"Runtime: {result['runtime']:.3f}s")
+            
+            # Update overall progress bar for verbose=1
+            if overall_pbar:
+                overall_pbar.update(1)
         
-        # Evaluate alignment
-        assert song.ground_truth is not None, f"Ground truth file for <{song.name}> not found"
-        result_alignment = evaluate_melody(
-            song.ground_truth, alignment.events, plot=False)
-        
-        # Save alignment result as MIDI
-        if save_mid:
-            assert isinstance(result_dir, Path)
-            extract_original_events(
-                alignment.events,
-                song.performance_path,
-                result_dir / f"{song.name}.mid")
-        
-        # Create alignment plot if requested
-        if save_plot:
-            assert isinstance(result_dir, Path)
-            plot_alignment(alignment, song.melody, song.performance, 
-                               song.ground_truth, result_dir / f"{song.name}_align.png")
-        
-        # Evaluate baseline if requested
-        result_baseline = None
-        if baseline:
-            assert song.baseline is not None, f"Baseline file for <{song.name}> not found"
-            result_baseline = evaluate_melody(song.ground_truth, song.baseline, plot=False)
-            baseline_results.append(result_baseline)
-        
-        # Print results if verbose=3 (full detail)
-        if verbose == 3:
-            if baseline and result_baseline is not None:
-                print(f"Baseline: {result_baseline.precision*100:.1f}% {result_baseline.recall*100:.1f}% {result_baseline.f1_score*100:.1f}%")
-            print(f"Alignment: {result_alignment.precision*100:.1f}% {result_alignment.recall*100:.1f}% {result_alignment.f1_score*100:.1f}%")
-            print(f"Runtime: {runtime:.3f}s")
-        
-        # Store results
-        alignment_results.append(result_alignment)
-        sample_names.append(song.name)
-        alignment_runtimes.append(runtime)
-        
-        # Update overall progress bar for verbose=1
+        # Close overall progress bar
         if overall_pbar:
-            overall_pbar.update(1)
+            overall_pbar.close()
     
-    # Close overall progress bar
-    if overall_pbar:
-        overall_pbar.close()
-    
+    else:
+        # Parallel processing
+        # Initialize progress bar for verbose=1 (single progress bar for all songs)
+        overall_pbar = None
+        if verbose == 1:
+            overall_pbar = tqdm(total=len(dataset), desc=f"Processing songs (n_jobs={n_jobs})")
+        
+        # Prepare arguments for parallel processing
+        args_list = [
+            (song, config, baseline, verbose_per_song, save_mid, save_plot, result_dir)
+            for song in dataset
+        ]
+        
+        max_workers = n_jobs if n_jobs > 0 else None
+        
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all jobs
+            future_to_idx = {
+                executor.submit(_process_single_song, args): i 
+                for i, args in enumerate(args_list)
+            }
+            
+            # Process completed jobs as they finish
+            results_dict = {}  # To store results by original index
+            
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                song = args_list[idx][0]  # Get the song from args
+                
+                try:
+                    result = future.result()
+                    results_dict[idx] = result
+                    
+                    if verbose == 3:
+                        print(f"Completed <{song.name}> ({idx+1}/{len(dataset)})...")
+                        if baseline and result['result_baseline'] is not None:
+                            baseline_res = result['result_baseline']
+                            print(f"Baseline: {baseline_res.precision*100:.1f}% {baseline_res.recall*100:.1f}% {baseline_res.f1_score*100:.1f}%")
+                        alignment_res = result['result_alignment']
+                        print(f"Alignment: {alignment_res.precision*100:.1f}% {alignment_res.recall*100:.1f}% {alignment_res.f1_score*100:.1f}%")
+                        print(f"Runtime: {result['runtime']:.3f}s")
+                    
+                    # Update overall progress bar for verbose=1
+                    if overall_pbar:
+                        overall_pbar.update(1)
+                        
+                except Exception as exc:
+                    print(f"Song <{song.name}> generated an exception: {exc}")
+                    if overall_pbar:
+                        overall_pbar.update(1)
+        
+        # Close overall progress bar
+        if overall_pbar:
+            overall_pbar.close()
+        
+        # Process results in original order and handle I/O operations sequentially
+        for i in range(len(dataset)):
+            if i not in results_dict:
+                continue  # Skip failed jobs
+                
+            result = results_dict[i]
+            song = args_list[i][0]
+            
+            # Store results in order
+            alignment_dict[song.name] = result['alignment']
+            alignment_results.append(result['result_alignment'])
+            if baseline and result['result_baseline'] is not None:
+                baseline_results.append(result['result_baseline'])
+            sample_names.append(song.name)
+            alignment_runtimes.append(result['runtime'])
+
     # Calculate aggregate statistics
     def calculate_stats(results):
         precisions = [r.precision for r in results]

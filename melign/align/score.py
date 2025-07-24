@@ -1,10 +1,11 @@
-from typing import Protocol, Sequence, Literal, Callable, Any, overload, Iterable
+from typing import Protocol, Literal, Callable, Any, overload, override, TypedDict
+from collections.abc import Iterable, Sequence
 import numpy as np
 from collections import Counter
 import xgboost as xgb
 import pandas as pd
 
-from melign.data.event import MidiEvent
+from melign.data.event import MidiEvent, EventLike
 from melign.data.sequence import MelodyLike, Melody
 from melign.data.io import PathLike
 
@@ -15,6 +16,12 @@ class MatchLike(Protocol):
     def sum_miss(self) -> int: ...
     @property
     def sum_error(self) -> float: ...
+    @property
+    def sum_shadow(self) -> int: ...
+    @property
+    def sum_between(self) -> int: ...
+    @property
+    def sum_above_between(self) -> int: ...
 
 type SongStatKeys = Literal['duration_per_event', 'note_mean_song', 'velocity_mean']
 
@@ -35,6 +42,8 @@ class ScoreModel(Protocol):
         self.song_stats = song_stats
 
 class SimpleModel(ScoreModel):
+
+    @override
     def __init__(self, weights: Any = None, penalty: float = 0) -> None:
         self.penalty = penalty
         self.song_stats = None
@@ -43,17 +52,39 @@ class SimpleModel(ScoreModel):
     def __call__(self, match: Iterable[MatchLike]) -> list[float]: ...
     @overload
     def __call__(self, match: MatchLike) -> float: ...
+    @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
         if isinstance(match, Iterable):
             return [self(m) for m in match]
         else:
             return len(match.events)
 
+class MelodicsWeights(TypedDict):
+    error: float
+    velocity: bool
+    miss: bool
+    note_mean: bool
+    shadow: bool
+    between: bool
+    above_between: bool
+
+def get_melodics_weights() -> MelodicsWeights:
+    return {
+        "error": 0.5,
+        "velocity": True,
+        "miss": True,
+        "note_mean": False,
+        "shadow": True,
+        "between": False,
+        "above_between": True,
+    }
+
 class MelodicsModel(ScoreModel):
 
+    @override
     def __init__(
         self,
-        weights: dict[Literal["error"], float] = {"error": 0.5},
+        weights: MelodicsWeights = get_melodics_weights(),
         penalty: float = 0
     ) -> None:
         self.weights = weights
@@ -64,15 +95,35 @@ class MelodicsModel(ScoreModel):
     def __call__(self, match: Iterable[MatchLike]) -> list[float]: ...
     @overload
     def __call__(self, match: MatchLike) -> float: ...
+    @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
         if isinstance(match, Iterable):
             return [self(m) for m in match]
         else:
             assert self.song_stats is not None, "Song stats required, use `load_song_stats` first"
-            v = sum(event.velocity for event in match.events) / 128
-            w1 = (1 - match.sum_miss / len(match.events))
-            w2 = sum(event.note for event in match.events) / len(match.events) / self.song_stats['note_mean_song']
-            return v*w1*w2 - self.weights['error']*match.sum_error/self.song_stats['duration_per_event']
+            score = len(match.events)
+            if self.weights['velocity']:
+                v = sum(event.velocity for event in match.events) / 128 / len(match.events)
+                score *= v
+            if self.weights['miss']:
+                m = (1 - match.sum_miss / len(match.events))
+                score *= m
+            if self.weights['note_mean']:
+                n = sum(event.note for event in match.events) / len(match.events) / self.song_stats['note_mean_song']
+                score *= n
+            if self.weights['shadow']:
+                s = (1 - match.sum_shadow / len(match.events))
+                score *= s
+            if self.weights['between']:
+                b = (1 - match.sum_between / len(match.events))
+                score *= b
+            if self.weights['above_between']:
+                ab = (1 - match.sum_above_between / len(match.events))
+                score *= ab
+            if self.weights['error']:
+                e = self.weights['error']*match.sum_error/self.song_stats['duration_per_event']
+                score -= e
+            return score
 
 class RegressionModel(ScoreModel):
 
@@ -152,6 +203,7 @@ type WeightKeys = Literal[
 
 class LinearModel(RegressionModel):
 
+    @override
     def __init__(self, weights: dict[WeightKeys, float], penalty: float = 0):
         assert 'intercept' in weights, "Intercept is required in weights"
         self.weights = weights
@@ -181,6 +233,7 @@ class LinearModel(RegressionModel):
     def __call__(self, match: Iterable[MatchLike]) -> list[float]: ...
     @overload
     def __call__(self, match: MatchLike) -> float: ...
+    @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
         # Intercept is added to the sum (1 * intercept)
         if isinstance(match, Iterable):
@@ -191,7 +244,8 @@ class LinearModel(RegressionModel):
                     for key in self.weights) - self.penalty
 
 class XGBoostModel(RegressionModel):
-    
+
+    @override
     def __init__(self, weights: PathLike, penalty: float = 0) -> None:
         self.model = xgb.XGBRegressor()
         self.model.load_model(weights)
@@ -221,6 +275,7 @@ class XGBoostModel(RegressionModel):
     def __call__(self, match: Iterable[MatchLike]) -> list[float]: ...
     @overload
     def __call__(self, match: MatchLike) -> float: ...
+    @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
         if isinstance(match, Iterable):
             data = [self.get_data(m) for m in match]
@@ -243,19 +298,35 @@ def get_linear_model_default_weights() -> dict[WeightKeys, float]:
 def tp_fp(
     match: MatchLike,
     gt: MelodyLike,
+    modulo: bool = True,
     tolerance: float = 0.1,
 ) -> tuple[int, int]:
     if not isinstance(gt, Melody):
         gt = Melody(gt)
-    gt %= 12
     match_melody = Melody(match.events)
-    match_melody %= 12
+    if modulo:
+        gt %= 12
+        match_melody %= 12
     tp = 0
     fp = 0
     for event in match_melody:
-        nearest = gt.nearest(event)
+        nearest = gt @ event
         if nearest is not None and abs(nearest.time - event.time) < tolerance:
             tp += 1
         else:
             fp += 1
     return tp, fp
+
+def is_tp(
+    event: EventLike,
+    gt: MelodyLike,
+    modulo: bool = True,
+    tolerance: float = 0.1,
+) -> bool:
+    if not isinstance(gt, Melody):
+        gt = Melody(gt)
+    if modulo:
+        gt %= 12
+        event %= 12
+    nearest = gt @ event
+    return nearest is not None and abs(nearest.time - event.time) < tolerance

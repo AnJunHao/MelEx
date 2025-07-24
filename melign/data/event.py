@@ -1,6 +1,6 @@
 from functools import cache
 from dataclasses import dataclass
-from typing import Literal, overload
+from typing import Literal, overload, override
 import warnings
 
 @cache
@@ -77,9 +77,9 @@ class MelEvent:
     def __repr__(self) -> str:
         # Convert note to note name
         if self.note > 12:
-            return f"MelEvent_(time={self.time:.2f}, note='{self.note_name}')"
+            return f"MelEvent_(time={self.time}, note='{self.note_name}')"
         else:
-            return f"MelEvent_(time={self.time:.2f}, note={self.note})"
+            return f"MelEvent_(time={self.time}, note={self.note})"
 
     def __floordiv__(self, other: float) -> 'MelEvent':
         # Quantize time to the nearest multiple of other
@@ -110,6 +110,7 @@ class MidiEvent(MelEvent):
     def __sub__(self, other: 'MidiEvent') -> 'MidiEvent': ...
     @overload
     def __sub__(self, other: 'MelEvent') -> 'MelEvent': ...
+    @override
     def __sub__(self, other: 'EventLike') -> 'EventLike':
         # "a - b": time, note, and velocity shift
         if isinstance(other, MidiEvent):
@@ -122,6 +123,7 @@ class MidiEvent(MelEvent):
     def __add__(self, other: 'MidiEvent') -> 'MidiEvent': ...
     @overload
     def __add__(self, other: 'MelEvent') -> 'MelEvent': ...
+    @override
     def __add__(self, other: 'EventLike') -> 'EventLike':
         # "a + b": time, note, and velocity shift
         if isinstance(other, MidiEvent):
@@ -130,18 +132,21 @@ class MidiEvent(MelEvent):
             return super(MidiEvent, self).__add__(other)
         return NotImplemented
 
+    @override
     def __rshift__(self, other: float) -> 'MidiEvent':
         # "a >> float": time shift
         if isinstance(other, (float, int)):
             return MidiEvent(self.time + other, self.note, self.velocity)
         return NotImplemented
 
+    @override
     def __lshift__(self, other: float) -> 'MidiEvent':
         # "a << float": time shift
         if isinstance(other, (float, int)):
             return MidiEvent(self.time - other, self.note, self.velocity)
         return NotImplemented
 
+    @override
     def __xor__(self, other: int) -> 'MidiEvent':
         # "a ^ int": note shift
         if isinstance(other, int):
@@ -152,6 +157,7 @@ class MidiEvent(MelEvent):
     def __truediv__(self, other: float) -> 'MidiEvent': ...
     @overload
     def __truediv__(self, other: 'EventLike') -> float: ...
+    @override
     def __truediv__(self, other: 'float | EventLike') -> 'MidiEvent | float':
         # "a / b": time ratio
         if isinstance(other, (MidiEvent, MelEvent)):
@@ -160,18 +166,21 @@ class MidiEvent(MelEvent):
             return MidiEvent(self.time / other, self.note, self.velocity)
         return NotImplemented
     
+    @override
     def __mul__(self, other: float) -> 'MidiEvent':
         # "a * float": time scale
         if isinstance(other, (float, int)):
             return MidiEvent(self.time * other, self.note, self.velocity)
         return NotImplemented
 
+    @override
     def __floordiv__(self, other: float) -> 'MidiEvent':
         # Quantize time to the nearest multiple of other
         if isinstance(other, (float, int)):
             return MidiEvent(round(self.time / other) * other, self.note, self.velocity)
         return NotImplemented
     
+    @override
     def __mod__(self, other: Literal[12]) -> 'MidiEvent':
         # "a % b": note modulo
         if other == 12:
@@ -182,15 +191,12 @@ class MidiEvent(MelEvent):
         else:
             return NotImplemented
 
-    @property
-    def note_name(self) -> str:
-        return midi_to_note_name(self.note)
-
+    @override
     def __repr__(self) -> str:
         if self.note > 12:
-            return f"MidiEvent_(time={self.time:.2f}, note='{self.note_name}', velocity={self.velocity})"
+            return f"MidiEvent_(time={self.time}, note='{self.note_name}', velocity={self.velocity})"
         else:
-            return f"MidiEvent_(time={self.time:.2f}, note={self.note}, velocity={self.velocity})"
+            return f"MidiEvent_(time={self.time}, note={self.note}, velocity={self.velocity})"
 
 def MidiEvent_(time: float, note: int | str, velocity: int) -> MidiEvent:
     if isinstance(note, str):

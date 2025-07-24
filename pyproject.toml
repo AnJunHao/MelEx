@@ -1,5 +1,5 @@
 [project]
-name = "exmel"
+name = "melign"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -19,6 +19,7 @@ dependencies = [
     "pretty-midi>=0.2.10",
     "scikit-learn>=1.7.0",
     "seaborn>=0.13.2",
+    "tinytag>=2.1.1",
     "tqdm>=4.67.1",
     "xgboost>=3.0.2",
 ]

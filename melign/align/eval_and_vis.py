@@ -669,7 +669,7 @@ def evaluate_melody(
     # Find true positives and mark matched gt notes
     matched_gt_indices = set()
     for p_event in pred:
-        nearest = gt.nearest(p_event)
+        nearest = gt @ p_event
         if nearest is not None:
             if abs(p_event.time - nearest.time) <= tolerance:
                 tp_notes.append(p_event)
@@ -680,7 +680,7 @@ def evaluate_melody(
     
     # Find false negatives (unmatched gt notes)
     for g_event in gt:
-        nearest = pred.nearest(g_event)
+        nearest = pred @ g_event
         if nearest is None or abs(g_event.time - nearest.time) > tolerance:
             fn_notes.append(g_event)
     

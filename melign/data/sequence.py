@@ -78,6 +78,9 @@ class Melody:
         return NotImplemented
 
     def __mod__(self, other: Literal[12]) -> "Melody":
+        """
+        Apply note modulo operation to all events (typically used for octave reduction).
+        """
         if other == 12:
             return Melody([event % 12 for event in self.events])
         elif isinstance(other, int):
@@ -86,10 +89,24 @@ class Melody:
         else:
             return NotImplemented
 
+    def __matmul__(self, other: EventLike | float) -> MelEvent | None:
+        """
+        Find the nearest event to the given event.
+        """
+        if isinstance(other, (float, int)):
+            return self.nearest_global(other)
+        return self.nearest(other)
+    
+    def __rmatmul__(self, other: EventLike | float) -> MelEvent | None:
+        """
+        Find the nearest event to the given event.
+        """
+        if isinstance(other, (float, int)):
+            return self.nearest_global(other)
+        return self.nearest(other)
+
     def __repr__(self) -> str:
-        if len(self.events) <= 2:
-            return f"Melody([{self.events.__repr__()}])"
-        elif len(self.events) <= 50:
+        if len(self.events) <= 50:
             # New line for each event
             return f"Melody([{',\n'.join([event.__repr__() for event in self.events])}])"
         else:
@@ -102,14 +119,47 @@ class Melody:
     def __getitem__(self, key: int) -> MelEvent: ...
     @overload
     def __getitem__(self, key: slice) -> "Melody": ...
-    def __getitem__(self, key: int | slice) -> "MelEvent | Melody":
+    @overload
+    def __getitem__(self, key: tuple[float | None, float | None]) -> "Melody": ...
+    def __getitem__(self, key: int | slice | tuple[float | None, float | None]) -> "MelEvent | Melody":
         if isinstance(key, slice):
             return Melody(self.events[key])
+        elif isinstance(key, tuple):
+            assert len(key) == 2, "Tuple for time slicing must contain exactly two elements"
+            return self.time_slice(key[0], key[1])
         else:
             return self.events[key]
 
     def __iter__(self) -> Iterator[MelEvent]:
         return iter(self.events)
+
+    def time_slice(self, start: float | None = None, stop: float | None = None) -> "Melody":
+        """
+        Slice the melody by time.
+        """
+        if start is None:
+            start_idx = None
+        else:
+            event = self @ start
+            assert event is not None, "Cannot perform float slicing on empty melody"
+            start_idx = self.events.index(event)
+            if event.time < start:
+                start_idx += 1
+        
+        if stop is None:
+            stop_idx = None
+        else:
+            event = self @ stop
+            assert event is not None, "Cannot perform float slicing on empty melody"
+            stop_idx = self.events.index(event)
+            if event.time > stop:
+                pass
+            else:
+                stop_idx += 1
+            if stop_idx >= len(self.events):
+                stop_idx = None
+        
+        return Melody(self.events[start_idx:stop_idx])
 
     def nearest(self, reference: EventLike) -> MelEvent | None:
         """
@@ -173,15 +223,16 @@ class Melody:
         return [self[i+1].time - self[i].time for i in range(len(self)-1)]
 
     def mean_diff(self) -> float:
-        return statistics.geometric_mean(self.diff())
+        diffs = self.diff()
+        diffs = filter(lambda x: x > 0, diffs)
+        return statistics.geometric_mean(diffs)
 
     def split(self, threshold: float = 16) -> list["Melody"]:
         """
         Separate the melody into multiple melodies based on the threshold.
         """
-        diffs = self.diff()
-        threshold = statistics.geometric_mean(diffs) * threshold
-        indices = [i+1 for i, d in enumerate(diffs) if d > threshold]
+        threshold = self.mean_diff() * threshold
+        indices = [i+1 for i, d in enumerate(self.diff()) if d > threshold]
         indices = [0] + indices + [len(self)]
         return [Melody(self.events[indices[i]:indices[i+1]]) for i in range(len(indices)-1)]
 
@@ -263,6 +314,9 @@ class Performance:
         
         self.global_events.sort(key=lambda x: x.time)  # Sort by time
         self.global_times = [event.time for event in self.global_events]
+
+        # Build gloabl time-to-index mapping for fast exact queries
+        self.global_time_to_index = {time: i for i, time in enumerate(self.global_times)}
 
     @property
     def duration(self) -> float:
@@ -388,56 +442,33 @@ class Performance:
         
         return results
 
-    def nearest_global(self, mel_event: EventLike, n: int = 1) -> list[MidiEvent]:
+    def nearest_global(self, ref_time: float) -> MidiEvent | None:
         """
-        Find n nearest events across all notes to the given event.
+        Find the nearest event across all notes to the given time.
         
-        Time Complexity: O(log N + n) where N is the total number of events
+        Time Complexity: O(log N) where N is the total number of events
         """
-        if n <= 0:
-            return []
-        
-        ref_time = mel_event.time
+        if len(self.global_events) == 0:
+            return None
         
         # Binary search on global time array
         idx = bisect.bisect_left(self.global_times, ref_time)
         
-        # Use two-pointer expansion on global events
-        left = idx - 1
-        right = idx
-        results = []
+        candidates = []
+        if idx > 0:
+            candidates.append(idx - 1)
+        if idx < len(self.global_events):
+            candidates.append(idx)
         
-        # Collect n nearest events globally
-        while len(results) < n and (left >= 0 or right < len(self.global_events)):
-            left_dist = float('inf')
-            right_dist = float('inf')
-            
-            # Calculate distances
-            if left >= 0:
-                left_dist = abs(self.global_events[left].time - ref_time)
-            if right < len(self.global_events):
-                right_dist = abs(self.global_events[right].time - ref_time)
-            
-            # Choose the closer event
-            if left_dist <= right_dist and left >= 0:
-                results.append(self.global_events[left])
-                left -= 1
-            elif right < len(self.global_events):
-                results.append(self.global_events[right])
-                right += 1
-            else:
-                break
-        
-        # Sort by distance for consistent ordering
-        results.sort(key=lambda event: abs(event.time - ref_time))
-        
-        return results
+        # Find the nearest by absolute time difference
+        nearest_idx = min(candidates, key=lambda i: abs(self.global_events[i].time - ref_time))
+        return self.global_events[nearest_idx]
 
     def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
         from melign.align.eval_and_vis import plot_performance
         plot_performance(self, save_path, show_plot)
 
-    def between(self, from_: MelEvent, to_: MelEvent) -> list[MidiEvent]:
+    def between(self, from_: EventLike, to_: EventLike) -> list[MidiEvent]:
         """
         Extract all events for a specific note within a given time range.
         
@@ -479,6 +510,37 @@ class Performance:
             results.append(MidiEvent(times[i], note, velocities[i]))
         
         return results
+
+    def global_between(self, from_: float, to_: float) -> list[MidiEvent]:
+        """
+        Extract all events within a given time range (exclusive of boundaries).
+        """
+        # Time-based search on global events
+        start_time, end_time = from_, to_
+        
+        if start_time > end_time:
+            return []
+        
+        if not self.global_times:
+            return []
+        
+        # Use binary search to find the start and end indices in global events
+        start_idx = bisect.bisect_left(self.global_times, start_time)
+        end_idx = bisect.bisect_right(self.global_times, end_time)
+        
+        # Return all events in the time range
+        return self.global_events[start_idx:end_idx]
+
+    def exact_global_between(self, from_: float, to_: float) -> list[MidiEvent]:
+        """
+        Extract all events for a specific note within a given time range (exclusive of boundaries).
+        The "from_" and "to_" must exist in the global_times array (e.g. in the performance)
+        """
+        start_idx = self.global_time_to_index[from_]
+        end_idx = self.global_time_to_index[to_]
+        if start_idx >= end_idx - 1:
+            return []
+        return self.global_events[start_idx+1:end_idx]
 
     def __xor__(self, note_shift: int) -> "Performance":
         """
@@ -548,9 +610,78 @@ class Performance:
         else:
             return NotImplemented
 
+    def __matmul__(self, other: 'EventLike | float') -> MidiEvent | None:
+        """
+        Find the nearest event to the given event or time.
+        If other is a float or int, find the nearest global event to that time.
+        If other is EventLike, find the nearest event with the same note.
+        """
+        if isinstance(other, (float, int)):
+            return self.nearest_global(other)
+        return self.nearest(other)
+
+    def __rmatmul__(self, other: EventLike | float) -> MidiEvent | None:
+        """
+        Find the nearest event to the given event or time.
+        If other is a float or int, find the nearest global event to that time.
+        If other is EventLike, find the nearest event with the same note.
+        """
+        if isinstance(other, (float, int)):
+            return self.nearest_global(other)
+        return self.nearest(other)
+
+    def __len__(self) -> int:
+        return len(self.global_events)
+
+    @overload
+    def __getitem__(self, key: int) -> MidiEvent: ...
+    @overload
+    def __getitem__(self, key: slice) -> "Performance": ...
+    @overload
+    def __getitem__(self, key: tuple[float | None, float | None]) -> "Performance": ...
+    def __getitem__(self, key: int | slice | tuple[float | None, float | None]) -> "MidiEvent | Performance":
+        if isinstance(key, slice):
+            return Performance(self.global_events[key])
+        elif isinstance(key, tuple):
+            assert len(key) == 2, "Tuple for time slicing must contain exactly two elements"
+            return self.time_slice(key[0], key[1])
+        else:
+            return self.global_events[key]
+
+    def __iter__(self) -> Iterator[MidiEvent]:
+        return iter(self.global_events)
+
+    def time_slice(self, start: float | None = None, stop: float | None = None) -> "Performance":
+        """
+        Slice the performance by time.
+        """
+        if start is None:
+            start_idx = None
+        else:
+            event = self @ start
+            assert event is not None, "Cannot perform float slicing on empty performance"
+            start_idx = self.global_events.index(event)
+            if event.time < start:
+                start_idx += 1
+        
+        if stop is None:
+            stop_idx = None
+        else:
+            event = self @ stop
+            assert event is not None, "Cannot perform float slicing on empty performance"
+            stop_idx = self.global_events.index(event)
+            if event.time > stop:
+                pass
+            else:
+                stop_idx += 1
+            if stop_idx >= len(self.global_events):
+                stop_idx = None
+        
+        return Performance(self.global_events[start_idx:stop_idx])
+
     def __repr__(self) -> str:
         if len(self.global_events) <= 50:
-            return f"Performance([{', '.join([event.__repr__() for event in self.global_events])}])"
+            return f"Performance([{',\n'.join([event.__repr__() for event in self.global_events])}])"
         else:
             return f"Performance([{self.global_events[0]}, ...({len(self.global_events) - 2} events)..., {self.global_events[-1]}])"
 

@@ -1,8 +1,9 @@
 from dataclasses import dataclass, field
-from typing import Callable, overload, Literal, Iterable
+from typing import Callable, overload, Literal, Iterable, Iterator
 from tqdm.auto import tqdm
+import warnings
 
-# from icecream import ic
+from icecream import ic
 
 from melign.data.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
 from melign.data.event import MidiEvent
@@ -16,6 +17,9 @@ class Match:
     tail_miss: int
     sum_miss: int
     sum_error: float
+    sum_shadow: int
+    sum_between: int
+    sum_above_between: int
     score_func: Callable[['Match'], float]
     melody_start: float
     melody_end: float
@@ -43,6 +47,9 @@ class Match:
             speed=self.speed,
             sum_miss=self.sum_miss,
             sum_error=self.sum_error,
+            sum_shadow=self.sum_shadow,
+            sum_between=self.sum_between,
+            sum_above_between=self.sum_above_between,
             melody_start=self.melody_start,
             melody_end=self.melody_end,
             start=self.events[0].time,
@@ -62,6 +69,9 @@ class Match:
             tail_miss=self.tail_miss,
             sum_miss=self.sum_miss,
             sum_error=self.sum_error,
+            sum_shadow=self.sum_shadow,
+            sum_between=self.sum_between,
+            sum_above_between=self.sum_above_between,
             score_func=self.score_func,
             melody_start=self.melody_start,
             melody_end=self.melody_end
@@ -76,6 +86,9 @@ class FrozenMatch:
     speed: float
     sum_miss: int
     sum_error: float
+    sum_shadow: int
+    sum_between: int
+    sum_above_between: int
     melody_start: float
     melody_end: float
     start: float = field(hash=True)
@@ -88,6 +101,9 @@ class FrozenMatch:
             speed=self.speed,
             sum_miss=self.sum_miss,
             sum_error=self.sum_error,
+            sum_shadow=self.sum_shadow,
+            sum_between=self.sum_between,
+            sum_above_between=self.sum_above_between,
             melody_start=self.melody_start,
             melody_end=self.melody_end,
             start=self.start,
@@ -177,13 +193,13 @@ def scan(
         if same_key:
             tv_list = performance.events_by_note.get(melody[0].note, [])
             lives = [Match([MidiEvent(tv[0], melody[0].note, tv[1])],
-                            speed_prior, 0, 0, 0.0,
+                            speed_prior, 0, 0, 0.0, 0, 0, 0,
                             score_func,
                             melody[0].time, melody[0].time)
                         for tv in tv_list]
         else:
             lives =  [Match([event],
-                            speed_prior, 0, 0, 0.0,
+                            speed_prior, 0, 0, 0.0, 0, 0, 0,
                             score_func,
                             melody[0].time, melody[0].time)
                         for event in performance.global_events]
@@ -254,6 +270,12 @@ def scan(
                 candidate.tail_miss = 0
                 candidate.sum_error += abs(diff.time)
                 candidate.melody_end = melody[-1].time
+
+                #################### Update Shadow / Between ####################
+                s, b, ab = s_b_ab(candidate.events, performance)
+                candidate.sum_shadow += s
+                candidate.sum_between += b
+                candidate.sum_above_between += ab
             
         #################### Update Misses ####################
             else:
@@ -316,6 +338,9 @@ class Alignment:
     score: float
     sum_miss: int
     sum_error: float
+    sum_shadow: int
+    sum_between: int
+    sum_above_between: int
     discarded_matches: list[FrozenMatch] | None = None
 
     def __repr__(self) -> str:
@@ -336,8 +361,18 @@ class Alignment:
     def __len__(self) -> int:
         return len(self.events)
 
+    @overload
+    def __getitem__(self, key: int) -> MidiEvent: ...
+    @overload
+    def __getitem__(self, key: slice) -> list[MidiEvent]: ...
+    def __getitem__(self, key: int | slice) -> MidiEvent | list[MidiEvent]:
+        return self.events[key]
+
+    def __iter__(self) -> Iterator[MidiEvent]:
+        return iter(self.events)
+
 @overload
-def align(
+def align(  # type: ignore[reportOverlappingOverload]
     melody: MelodyLike,
     performance: PerformanceLike,
     config: AlignConfig,
@@ -362,7 +397,7 @@ def align(
     config: AlignConfig,
     defer_score: bool = True,
     verbose: bool = True,
-    skip_wisp: bool = False,
+    skip_wisp: Literal[False] | Literal[True] = False,
     return_discarded_matches: bool = False
 ) -> Alignment | list[FrozenMatch]:
 
@@ -412,9 +447,17 @@ def align(
     
     if len(candidates) == 0:
         if return_discarded_matches:
-            return Alignment(events=[], matches=[], score=0, sum_miss=0, sum_error=0, discarded_matches=[])
+            return Alignment(
+                events=[], matches=[],
+                score=0, sum_miss=0, sum_error=0,
+                sum_shadow=0, sum_between=0, sum_above_between=0,
+                discarded_matches=[])
         else:
-            return Alignment(events=[], matches=[], score=0, sum_miss=0, sum_error=0, discarded_matches=None)
+            return Alignment(
+                events=[], matches=[],
+                score=0, sum_miss=0, sum_error=0,
+                sum_shadow=0, sum_between=0, sum_above_between=0,
+                discarded_matches=None)
 
     if skip_wisp:
         return candidates
@@ -439,4 +482,52 @@ def align(
     return Alignment(concat_events, opt_subset, opt_score,
                     sum(match.sum_miss for match in opt_subset),
                     sum(match.sum_error for match in opt_subset),
+                    sum(match.sum_shadow for match in opt_subset),
+                    sum(match.sum_between for match in opt_subset),
+                    sum(match.sum_above_between for match in opt_subset),
                     discarded_matches)
+
+def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int, int]:
+    """
+    Calculate the number of shadow, between, and above-between events,
+    for the second last event in the list.
+    """
+    if len(events) <= 1:
+        warnings.warn("Should not happen")
+        return 0, 0, 0
+
+    #################### Shadow: Nearby and above event ####################
+    potential_shadows = performance.global_between(events[-2].time-0.1, events[-2].time+0.1)
+    s_ = 0
+    for s in potential_shadows:
+        if s in events[-3:]:
+            continue
+        if s.note > events[-2].note:
+            s_ = 1
+            break
+
+    #################### Between: Between the last two events ####################
+    #################### Between Above: Between and above the last two events ####################
+    potential_between = performance.global_between(events[-2].time+0.1, events[-1].time-0.1)
+    b_ = 0
+    ab_ = 0
+    for b in potential_between:
+        if (events[-2].note <= b.note and b.note <= events[-1].note) or \
+            (events[-1].note <= b.note and b.note <= events[-2].note):
+            b_ = 1
+        elif (b.note > events[-1].note and b.note > events[-2].note):
+            ab_ = 1
+        if b_ == 1 and ab_ == 1:
+            break
+    return s_, b_, ab_
+
+def predict_f1(alignment: Alignment) -> float:
+    between = alignment.sum_between / len(alignment.events)
+    miss = alignment.sum_miss / len(alignment.events)
+    error = alignment.sum_error / len(alignment.events)
+    shadow = alignment.sum_shadow / len(alignment.events)
+    return 0.9950128655273125 \
+         - 0.6607903283221324 * between \
+         - 0.5518402627709131 * miss \
+         - 0.32216793174475333 * error \
+         - 0.74385038669203 * shadow

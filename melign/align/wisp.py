@@ -1,7 +1,8 @@
 # WISP: Weighted Interval Scheduling Problem
 
 import bisect
-from typing import Protocol, Sequence, overload, Literal
+from typing import Protocol, overload, Literal
+from collections.abc import Sequence
 from dataclasses import dataclass
 from tqdm.auto import tqdm
 from math import log2, ceil
@@ -175,7 +176,7 @@ def f1_optimal_interval_scheduling[T: Detection](
                 low = mid                        # F1 >= mid attainable
             else:
                 high = mid                       # not attainable
-            pbar.update(1)
+            _ = pbar.update(1)
 
     max_f1 = low                             # within `epsilon` of optimum
 

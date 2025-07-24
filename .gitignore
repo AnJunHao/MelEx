@@ -165,3 +165,9 @@ cython_debug/
 results/
 temp/
 dev_data/
+
+*.xls
+*.pkl
+*.xlsx
+*.csv
+*.json
