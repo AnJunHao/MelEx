@@ -13,8 +13,9 @@ from melign.align.alignment import AlignConfig, align, Alignment
 from melign.data.io import PathLike, extract_original_events
 from melign.align.eval_and_vis import evaluate_melody, plot_alignment
 from melign.api.dataset import Dataset, DatasetLike, Song
+from melign.api.preset import get_default_config
 
-def _process_single_song(args: tuple[Song, AlignConfig, bool, bool, bool, bool, PathLike | None]):
+def _evaluate_single_song(args: tuple[Song, AlignConfig, bool, bool, bool, bool, PathLike | None]):
     """
     Process a single song for parallel execution.
     Returns all the data needed for the main thread to handle I/O and aggregation.
@@ -87,8 +88,8 @@ def inference_pipeline(
     return result
 
 def eval_pipeline(
-    config: AlignConfig,
     dataset: DatasetLike,
+    config: AlignConfig = get_default_config(),
     result_dir: PathLike | None = None,
     save_plot: bool = False,
     save_params: bool = False,
@@ -175,7 +176,7 @@ def eval_pipeline(
                 print(f"Aligning <{song.name}> ({i+1}/{len(dataset)})...")
             
             # Process song
-            result = _process_single_song((song, config, baseline, verbose_per_song, save_mid, save_plot, result_dir))
+            result = _evaluate_single_song((song, config, baseline, verbose_per_song, save_mid, save_plot, result_dir))
             
             # Store results
             alignment_dict[song.name] = result['alignment']
@@ -220,7 +221,7 @@ def eval_pipeline(
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             # Submit all jobs
             future_to_idx = {
-                executor.submit(_process_single_song, args): i 
+                executor.submit(_evaluate_single_song, args): i 
                 for i, args in enumerate(args_list)
             }
             
@@ -282,18 +283,21 @@ def eval_pipeline(
         return {
             'precision': {
                 'mean': np.mean(precisions),
+                'median': np.median(precisions),
                 'std': np.std(precisions),
                 'min': np.min(precisions),
                 'max': np.max(precisions)
             },
             'recall': {
                 'mean': np.mean(recalls),
+                'median': np.median(recalls),
                 'std': np.std(recalls),
                 'min': np.min(recalls),
                 'max': np.max(recalls)
             },
             'f1_score': {
                 'mean': np.mean(f1_scores),
+                'median': np.median(f1_scores),
                 'std': np.std(f1_scores),
                 'min': np.min(f1_scores),
                 'max': np.max(f1_scores)
@@ -376,9 +380,9 @@ def eval_pipeline(
         
         results_data.append(row_data)
     
-    # Add a final row with the aggregate statistics
-    aggregate_row = {
-        'Sample': 'Aggregate',
+    # Add aggregate rows with mean and median statistics
+    mean_aggregate_row = {
+        'Sample': 'Mean',
         'Alignment_Precision': alignment_stats['precision']['mean'],
         'Alignment_Recall': alignment_stats['recall']['mean'],
         'Alignment_F1': alignment_stats['f1_score']['mean'],
@@ -387,7 +391,7 @@ def eval_pipeline(
     
     if baseline:
         assert baseline_stats is not None
-        aggregate_row.update({
+        mean_aggregate_row.update({
             'Baseline_Precision': baseline_stats['precision']['mean'],
             'Baseline_Recall': baseline_stats['recall']['mean'],
             'Baseline_F1': baseline_stats['f1_score']['mean'],
@@ -396,7 +400,27 @@ def eval_pipeline(
             'F1_Improvement': alignment_stats['f1_score']['mean'] - baseline_stats['f1_score']['mean'],
         })
     
-    results_data.append(aggregate_row)
+    median_aggregate_row = {
+        'Sample': 'Median',
+        'Alignment_Precision': alignment_stats['precision']['median'],
+        'Alignment_Recall': alignment_stats['recall']['median'],
+        'Alignment_F1': alignment_stats['f1_score']['median'],
+        'Runtime_seconds': np.median(alignment_runtimes)
+    }
+    
+    if baseline:
+        assert baseline_stats is not None
+        median_aggregate_row.update({
+            'Baseline_Precision': baseline_stats['precision']['median'],
+            'Baseline_Recall': baseline_stats['recall']['median'],
+            'Baseline_F1': baseline_stats['f1_score']['median'],
+            'Precision_Improvement': alignment_stats['precision']['median'] - baseline_stats['precision']['median'],
+            'Recall_Improvement': alignment_stats['recall']['median'] - baseline_stats['recall']['median'],
+            'F1_Improvement': alignment_stats['f1_score']['median'] - baseline_stats['f1_score']['median'],
+        })
+    
+    results_data.append(mean_aggregate_row)
+    results_data.append(median_aggregate_row)
     
     df = pd.DataFrame(results_data)
     

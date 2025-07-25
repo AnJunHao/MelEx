@@ -28,7 +28,7 @@ class Melody:
             elif source.suffix in (".note", ".txt"):
                 self.events = load_note(source)
             else:
-                raise ValueError(f"Invalid file type: {source.suffix}")
+                raise ValueError(f"Unsupported file type: {source.suffix}")
         elif isinstance(source, Melody):
             self.events = source.events
         elif isinstance(source, Iterable):

@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from melign.align.alignment import Alignment, FrozenMatch, concat_matches
 from melign.align.score import ScoreModel
-from melign.align.wisp import weighted_interval_scheduling
+from melign.align.dp import weighted_interval_scheduling
 from melign.align.eval_and_vis import evaluate_melody
 from melign.api.dataset import Dataset, Song
 from melign.data.io import PathLike

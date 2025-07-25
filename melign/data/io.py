@@ -87,7 +87,7 @@ def melody_to_midi(melody: Iterable[EventLike] | PathLike, path: PathLike) -> No
         elif melody.suffix in (".note", ".txt"):
             events = load_note(melody)
         else:
-            raise ValueError(f"Invalid file type: {melody.suffix}")
+            raise ValueError(f"Unsupported file type: {melody.suffix}")
     else:
         mel_path = None
         events = list(melody)
@@ -152,7 +152,7 @@ def melody_to_note(melody: Iterable[EventLike] | PathLike, path: PathLike) -> No
         elif melody.suffix in (".note", ".txt"):
             events = load_note(melody)
         else:
-            raise ValueError(f"Invalid file type: {melody.suffix}")
+            raise ValueError(f"Unsupported file type: {melody.suffix}")
     else:
         events = list(melody)
     
@@ -194,7 +194,7 @@ def extract_original_events(
         elif melody.suffix in (".note", ".txt"):
             events = load_note(melody)
         else:
-            raise ValueError(f"Invalid file type: {melody.suffix}")
+            raise ValueError(f"Unsupported file type: {melody.suffix}")
     else:
         events = list(melody)
     

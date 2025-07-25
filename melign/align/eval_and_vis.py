@@ -7,7 +7,7 @@ from matplotlib.figure import Figure
 from dataclasses import dataclass
 
 from melign.data.sequence import MelodyLike, Melody, PerformanceLike, Performance
-from melign.align.alignment import Alignment, MatchLike
+from melign.align.alignment import Alignment, MatchLike, self_eval
 from melign.data.event import MelEvent
 from melign.data.io import PathLike
 
@@ -16,7 +16,9 @@ def plot_alignment(
     ref_melody: MelodyLike,
     performance: PerformanceLike | None = None,
     ground_truth: MelodyLike | None = None,
-    save_path: PathLike | None = None
+    save_path: PathLike | None = None,
+    tolerance: float = 0.1,
+    modulo: bool = True,
 ) -> None:
     """
     Visualize the alignment by showing the source of each match chunk.
@@ -30,6 +32,9 @@ def plot_alignment(
         alignment: Alignment object containing matches and aligned events
         ref_melody: Original melody (MelodyLike)
         performance: Performance (PerformanceLike)
+        ground_truth: Ground truth melody for evaluation (MelodyLike)
+        tolerance: Time tolerance for matching notes in evaluation (seconds)
+        modulo: Whether to use modulo 12 for note matching in evaluation
         save_path: Optional path to save the visualization
     """
     # Convert ref_melody to Melody object if needed
@@ -128,39 +133,34 @@ def plot_alignment(
     # Ground truth evaluation if provided
     tp_events, fp_events, fn_events = [], [], []
     if ground_truth_melody:
-        # Evaluate alignment against ground truth (similar to evaluate_melody)
-        tolerance = 0.1  # Default tolerance
-        modulo = True    # Default modulo
-        
-        # Keep original events for visualization
+        # Use the same evaluation logic as evaluate_melody function
         gt_original = ground_truth_melody
         pred_original = Melody(alignment_events)
         
-        # Create moduloed versions for matching logic only
-        gt_modulo = gt_original % 12 if modulo else gt_original
-        pred_modulo = pred_original % 12 if modulo else pred_original
+        # Apply modulo if requested (for matching logic only)
+        gt_eval = gt_original % 12 if modulo else gt_original
+        pred_eval = pred_original % 12 if modulo else pred_original
         
-        # Find true positives and mark matched gt notes
-        matched_gt_indices = set()
-        for i, p_event_mod in enumerate(pred_modulo):
-            matched = False
-            for j, g_event_mod in enumerate(gt_modulo):
-                if p_event_mod.note == g_event_mod.note:
-                    if abs(p_event_mod.time - g_event_mod.time) < tolerance:
-                        # Store original events for visualization
-                        tp_events.append(pred_original[i])
-                        matched_gt_indices.add(j)
-                        matched = True
-                        break
-            if not matched:
-                # Store original event for visualization
-                fp_events.append(pred_original[i])
+        # Find true positives and false positives
+        for i, p_event in enumerate(pred_eval):
+            nearest = gt_eval @ p_event
+            if nearest is not None:
+                if abs(p_event.time - nearest.time) <= tolerance:
+                    # Use index to get corresponding original event for visualization
+                    tp_events.append(pred_original.events[i])
+                else:
+                    # Use index to get corresponding original event for visualization
+                    fp_events.append(pred_original.events[i])
+            else:
+                # Use index to get corresponding original event for visualization
+                fp_events.append(pred_original.events[i])
         
         # Find false negatives (unmatched gt notes)
-        for j, g_event_mod in enumerate(gt_modulo):
-            if j not in matched_gt_indices:
-                # Store original event for visualization
-                fn_events.append(gt_original[j])
+        for i, g_event in enumerate(gt_eval):
+            nearest = pred_eval @ g_event
+            if nearest is None or abs(g_event.time - nearest.time) > tolerance:
+                # Use index to get corresponding original event for visualization
+                fn_events.append(gt_original.events[i])
     
     # Helper function to calculate match statistics
     def get_match_stats(match: MatchLike):
@@ -229,7 +229,7 @@ def plot_alignment(
                 
                 ax.text(label_x, label_y, match_text, ha='center', va='center',
                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9),
-                       fontsize=7, fontweight='bold')
+                       fontsize=4)
 
         # Draw events with ground truth evaluation coloring if provided
         if ground_truth_eval:
@@ -343,7 +343,7 @@ def plot_alignment(
     if performance_events:
         title_parts.append(f'Performance ({len(performance_events)} events)')
     if ground_truth_melody:
-        title_parts.append(f'Ground Truth Evaluation')
+        title_parts.append(f'Ground Truth Evaluation (tol={tolerance:.2f}s, mod={modulo})')
     alignment_title = ' + '.join(title_parts)
 
     # Draw performance events in the alignment panel if provided
@@ -537,7 +537,7 @@ def plot_alignment(
     if performance_events:
         title += f' (with Performance)'
     title += f'\nMatches: {len(alignment.matches)}, Score: {alignment.score:.2f}, '
-    title += f'Duration: {duration:.1f}s'
+    title += f'Duration: {time_max - time_min:.1f}s'
     fig.suptitle(title, fontsize=14, fontweight='bold', y=0.95)
     
     # Add legend - simplified based on what's available
@@ -596,18 +596,34 @@ def plot_alignment(
     stats_text = f"Alignment Stats:\n"
 
     if ground_truth_melody:
+        # Calculate evaluation metrics using the same logic as evaluate_melody
         tp_count = len(tp_events)
         fp_count = len(fp_events)
         fn_count = len(fn_events)
         precision = tp_count / (tp_count + fp_count) if (tp_count + fp_count) > 0 else 0
         recall = tp_count / (tp_count + fn_count) if (tp_count + fn_count) > 0 else 0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        
+        stats_text += f"Ground Truth Evaluation:\n"
         stats_text += f"TP: {tp_count}, FP: {fp_count}, FN: {fn_count}\n"
-        stats_text += f"Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}\n"
+        stats_text += f"Precision: {precision:.3f}\n"
+        stats_text += f"Recall: {recall:.3f}\n"
+        stats_text += f"F1-Score: {f1_score:.3f}\n"
+        stats_text += f"Tolerance: {tolerance:.2f}s\n"
+        stats_text += f"Modulo: {modulo}\n"
+        stats_text += f"\n"
+    
+    stats_text += f"Alignment Metrics:\n"
     stats_text += f"Matches: {len(alignment.matches)}\n"
     stats_text += f"Score: {alignment.score:.3f}\n"
-    stats_text += f"Sum Miss: {alignment.sum_miss}\n"
-    stats_text += f"Sum Error: {alignment.sum_error:.3f}"
+
+    alignment_eval = self_eval(alignment)
+    stats_text += f"Pred F1: {alignment_eval['pred_f1']:.3f}\n"
+    stats_text += f"Above Between: {alignment_eval['above_between']:.3f}\n"
+    stats_text += f"Between: {alignment_eval['between']:.3f}\n"
+    stats_text += f"Error: {alignment_eval['error']:.3f}\n"
+    stats_text += f"Miss: {alignment_eval['miss']:.3f}\n"
+    stats_text += f"Shadow: {alignment_eval['shadow']:.3f}\n"
     
     ax_melody.text(0.02, 0.98, stats_text, transform=ax_melody.transAxes,
                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.1),

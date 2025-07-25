@@ -4,10 +4,12 @@ import numpy as np
 from collections import Counter
 import xgboost as xgb
 import pandas as pd
+from math import log2
 
 from melign.data.event import MidiEvent, EventLike
 from melign.data.sequence import MelodyLike, Melody
 from melign.data.io import PathLike
+from melign.align.dp import Pair
 
 class MatchLike(Protocol):
     @property
@@ -330,3 +332,29 @@ def is_tp(
         event %= 12
     nearest = gt @ event
     return nearest is not None and abs(nearest.time - event.time) < tolerance
+
+class SizedPair(Pair, Protocol):
+    
+    def __len__(self) -> int: ...
+
+class StructuralMapping:
+
+    def __init__(self, pair: SizedPair) -> None:
+        self.R = (pair.end - pair.start) / (pair.melody_end - pair.melody_start)
+        self.T = pair.start - self.R * pair.melody_start
+
+    def mel_to_perf(self, time: float) -> float:
+        return time * self.R + self.T
+
+    def perf_to_mel(self, time: float) -> float:
+        return (time - self.T) / self.R
+
+    def structure_score(self, pair: SizedPair, melody_duration: float) -> float:
+        match_center = (pair.start + pair.end) / 2
+        match_to_mel = self.perf_to_mel(match_center)
+        mel_center = (pair.melody_start + pair.melody_end) / 2
+        rel_diff = abs(mel_center - match_to_mel) / melody_duration
+        return (1 - rel_diff) * len(pair) * log2(len(pair))
+
+    def __call__(self, pair: SizedPair, melody_duration: float) -> float:
+        return self.structure_score(pair, melody_duration)

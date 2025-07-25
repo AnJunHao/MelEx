@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, TypedDict, overload
 from dataclasses import dataclass
 from tinytag import TinyTag
+from tqdm.auto import tqdm
 
 from melign.data.io import PathLike
 from melign.data.sequence import Melody, Performance
@@ -37,7 +38,7 @@ default_config: DatasetConfig = {
 
 class Dataset:
     """
-    A dataset of songs, organized in this structure:
+    A dataset of songs, organized in this folder structure:
     
     dataset/
     ├── song one/
@@ -110,6 +111,7 @@ class Dataset:
         if isinstance(query, slice):
             return Dataset(self.song_dirs[query])
         if isinstance(query, Iterable):
+            query = set(query)
             return Dataset([dir_ for dir_ in self.song_dirs if dir_.name in query])
 
         song_dir = self.song_dirs[query]
@@ -167,8 +169,7 @@ class Dataset:
             yield self[i]
 
     def __repr__(self) -> str:
-        cache_info = f", cache_size={len(self._cache)}" if self.enable_cache else ""
-        return f"Dataset(source={self.song_dirs.__repr__()}{cache_info})"
+        return f"Dataset(source={self.song_dirs.__repr__()})"
 
     def is_full(self) -> bool:
         if not self.is_valid():
@@ -203,5 +204,16 @@ class Dataset:
             return performance[None, audio_duration]
         else:
             return performance
-            
+
+    def list_songs_to_truncate(self) -> list[str]:
+        songs_to_truncate = []
+        for song in tqdm(self, desc="Scanning dataset..."):
+            assert song.audio_path is not None, f"Audio file is required to truncate performance for {song.name}"
+            audio_duration = TinyTag.get(song.audio_path).duration
+            assert audio_duration is not None, f"Audio duration is None for {song.audio_path}"
+            midi_duration = song.performance.duration
+            if midi_duration > audio_duration:
+                songs_to_truncate.append(song.name)
+        return songs_to_truncate
+
 type DatasetLike = Dataset | PathLike | Iterable[PathLike]

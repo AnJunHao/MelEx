@@ -1,14 +1,12 @@
 from dataclasses import dataclass, field
-from typing import Callable, overload, Literal, Iterable, Iterator
+from typing import Callable, overload, Literal, Iterable, Iterator, TypedDict
 from tqdm.auto import tqdm
 import warnings
 
-from icecream import ic
-
 from melign.data.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
 from melign.data.event import MidiEvent
-from melign.align.wisp import weighted_interval_scheduling
-from melign.align.score import ScoreModel, MelodicsModel
+from melign.align.dp import weighted_interval_scheduling, non_crossing_weighted_bi_interval_scheduling
+from melign.align.score import ScoreModel, MelodicsModel, StructuralMapping
 
 @dataclass
 class Match:
@@ -80,6 +78,16 @@ class Match:
     def __len__(self) -> int:
         return len(self.events)
 
+    def __iter__(self) -> Iterator[MidiEvent]:
+        return iter(self.events)
+
+    @overload
+    def __getitem__(self, key: int) -> MidiEvent: ...
+    @overload
+    def __getitem__(self, key: slice) -> list[MidiEvent]: ...
+    def __getitem__(self, key: int | slice) -> MidiEvent | list[MidiEvent]:
+        return self.events[key]
+
 @dataclass(frozen=True, slots=True)
 class FrozenMatch:
     events: tuple[MidiEvent, ...]
@@ -110,6 +118,19 @@ class FrozenMatch:
             end=self.end,
             score=score
         )
+
+    def __len__(self) -> int:
+        return len(self.events)
+
+    def __iter__(self) -> Iterator[MidiEvent]:
+        return iter(self.events)
+
+    @overload
+    def __getitem__(self, key: int) -> MidiEvent: ...
+    @overload
+    def __getitem__(self, key: slice) -> tuple[MidiEvent, ...]: ...
+    def __getitem__(self, key: int | slice) -> MidiEvent | tuple[MidiEvent, ...]:
+        return self.events[key]
 
 type MatchLike = Match | FrozenMatch
 
@@ -317,7 +338,7 @@ def scan(
 
     return new_lives, frozens
 
-@dataclass
+@dataclass(slots=True)
 class AlignConfig:
     score_model: ScoreModel = field(default_factory=MelodicsModel)
     same_key: bool = False
@@ -326,37 +347,29 @@ class AlignConfig:
     variable_tail: bool = True
     local_tolerance: float = 0.5
     miss_tolerance: int = 2
-    candidate_min_score: float = 7
-    candidate_min_length: int = 10
-    hop_length: int = 8
+    candidate_min_score: float = 3.5
+    candidate_min_length: int = 5
+    hop_length: int = 1
     split_melody: bool = True
+    structural_align: bool = False
 
 @dataclass(frozen=True, slots=True)
 class Alignment:
     events: list[MidiEvent]
     matches: list[FrozenMatch]
     score: float
-    sum_miss: int
-    sum_error: float
-    sum_shadow: int
-    sum_between: int
-    sum_above_between: int
     discarded_matches: list[FrozenMatch] | None = None
 
     def __repr__(self) -> str:
         if self.discarded_matches is None:  
             return f"Alignment(events=[...({len(self.events)} events)...], " \
                     f"matches=[...({len(self.matches)} matches)...], " \
-                    f"score={self.score}, " \
-                    f"sum_miss={self.sum_miss}, " \
-                    f"sum_error={self.sum_error})"
+                    f"score={self.score}, "
         else:
             return f"Alignment(events=[...({len(self.events)} events)...], " \
                     f"matches=[...({len(self.matches)} matches)...], " \
-                    f"discarded_matches=[...({len(self.discarded_matches)} discarded matches)...], " \
                     f"score={self.score}, " \
-                    f"sum_miss={self.sum_miss}, " \
-                    f"sum_error={self.sum_error})"
+                    f"discarded_matches=[...({len(self.discarded_matches)} discarded matches)...])"
 
     def __len__(self) -> int:
         return len(self.events)
@@ -449,29 +462,40 @@ def align(
         if return_discarded_matches:
             return Alignment(
                 events=[], matches=[],
-                score=0, sum_miss=0, sum_error=0,
-                sum_shadow=0, sum_between=0, sum_above_between=0,
+                score=0,
                 discarded_matches=[])
         else:
             return Alignment(
                 events=[], matches=[],
-                score=0, sum_miss=0, sum_error=0,
-                sum_shadow=0, sum_between=0, sum_above_between=0,
+                score=0,
                 discarded_matches=None)
 
     if skip_wisp:
         return candidates
 
-    if defer_score:
-        scores = config.score_model(candidates)
-        updated_candidates: list[FrozenMatch] = []
-        for candidate, score in zip(candidates, scores):
-            if score >= config.candidate_min_score:
-                updated_candidates.append(candidate.update_score(score))
+    if config.structural_align:
+        if not defer_score:
+            warnings.warn("defer_score should be True when structural_align is True", stacklevel=2)
+        max_match = max(candidates, key=lambda x: len(x))
+        structural_mapping = StructuralMapping(max_match)
+        updated_candidates = [
+            candidate.update_score(structural_mapping(candidate, melody.duration))
+            for candidate in candidates
+        ]
         candidates = updated_candidates
+        opt_score, opt_subset = non_crossing_weighted_bi_interval_scheduling(
+            updated_candidates, return_subset=True, verbose=False)
+    else:
+        if defer_score:
+            scores = config.score_model(candidates)
+            updated_candidates: list[FrozenMatch] = []
+            for candidate, score in zip(candidates, scores):
+                if score >= config.candidate_min_score:
+                    updated_candidates.append(candidate.update_score(score))
+            candidates = updated_candidates
 
-    opt_score, opt_subset = weighted_interval_scheduling(
-        candidates, return_subset=True, verbose=False)
+        opt_score, opt_subset = weighted_interval_scheduling(
+            candidates, return_subset=True, verbose=False)
 
     if return_discarded_matches:
         discarded_matches = [match for match in candidates if match not in opt_subset]
@@ -480,11 +504,6 @@ def align(
 
     concat_events = concat_matches(opt_subset)
     return Alignment(concat_events, opt_subset, opt_score,
-                    sum(match.sum_miss for match in opt_subset),
-                    sum(match.sum_error for match in opt_subset),
-                    sum(match.sum_shadow for match in opt_subset),
-                    sum(match.sum_between for match in opt_subset),
-                    sum(match.sum_above_between for match in opt_subset),
                     discarded_matches)
 
 def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int, int]:
@@ -493,7 +512,7 @@ def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int,
     for the second last event in the list.
     """
     if len(events) <= 1:
-        warnings.warn("Should not happen")
+        warnings.warn("Should never happen: s_b_ab must be called with at least 2 events", stacklevel=2)
         return 0, 0, 0
 
     #################### Shadow: Nearby and above event ####################
@@ -521,13 +540,30 @@ def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int,
             break
     return s_, b_, ab_
 
-def predict_f1(alignment: Alignment) -> float:
-    between = alignment.sum_between / len(alignment.events)
-    miss = alignment.sum_miss / len(alignment.events)
-    error = alignment.sum_error / len(alignment.events)
-    shadow = alignment.sum_shadow / len(alignment.events)
-    return 0.9950128655273125 \
+class SelfEvalResult(TypedDict):
+    pred_f1: float
+    above_between: float
+    between: float
+    error: float
+    miss: float
+    shadow: float
+
+def self_eval(alignment: Alignment) -> SelfEvalResult:
+    above_between = sum(match.sum_above_between for match in alignment.matches) / len(alignment.events)
+    between = sum(match.sum_between for match in alignment.matches) / len(alignment.events)
+    error = sum(match.sum_error for match in alignment.matches) / len(alignment.events)
+    miss = sum(match.sum_miss for match in alignment.matches) / len(alignment.events)
+    shadow = sum(match.sum_shadow for match in alignment.matches) / len(alignment.events)
+    pred = 0.9950128655273125 \
          - 0.6607903283221324 * between \
          - 0.5518402627709131 * miss \
          - 0.32216793174475333 * error \
          - 0.74385038669203 * shadow
+    return SelfEvalResult(
+        pred_f1=pred,
+        above_between=above_between,
+        between=between,
+        error=error,
+        miss=miss,
+        shadow=shadow
+    )

@@ -2,7 +2,7 @@ from melign.align.score import XGBoostModel, MelodicsModel
 from melign.align.alignment import AlignConfig
 from melign.data.io import PathLike
 
-def get_melodics_config(hop_length: int = 2) -> AlignConfig:
+def get_melodics_config(hop_length: int = 1) -> AlignConfig:
     return AlignConfig(
         MelodicsModel(),
         same_key=False,
@@ -16,7 +16,7 @@ def get_melodics_config(hop_length: int = 2) -> AlignConfig:
         hop_length=hop_length,
         split_melody=True)
 
-def get_xgboost_config(model_path: PathLike, hop_length: int = 2) -> AlignConfig:
+def get_xgboost_config(model_path: PathLike, hop_length: int = 1) -> AlignConfig:
     return AlignConfig(
         XGBoostModel(model_path),
         same_key=False,
@@ -29,3 +29,5 @@ def get_xgboost_config(model_path: PathLike, hop_length: int = 2) -> AlignConfig
         candidate_min_length=8,
         hop_length=hop_length,
         split_melody=True)
+
+get_default_config = get_melodics_config
