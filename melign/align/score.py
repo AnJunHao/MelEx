@@ -1,4 +1,4 @@
-from typing import Protocol, Literal, Callable, Any, overload, override, TypedDict
+from typing import Protocol, Literal, Callable, Any, overload, override, TypedDict, runtime_checkable
 from collections.abc import Iterable, Sequence
 import numpy as np
 from collections import Counter
@@ -11,6 +11,7 @@ from melign.data.sequence import MelodyLike, Melody
 from melign.data.io import PathLike
 from melign.align.dp import Pair
 
+@runtime_checkable
 class MatchLike(Protocol):
     @property
     def events(self) -> Sequence[MidiEvent]: ...
@@ -99,7 +100,8 @@ class MelodicsModel(ScoreModel):
     def __call__(self, match: MatchLike) -> float: ...
     @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
-        if isinstance(match, Iterable):
+        if not isinstance(match, MatchLike):
+            assert isinstance(match, Iterable), "MatchLike or Iterable[MatchLike] expected"
             return [self(m) for m in match]
         else:
             assert self.song_stats is not None, "Song stats required, use `load_song_stats` first"
@@ -339,9 +341,10 @@ class SizedPair(Pair, Protocol):
 
 class StructuralMapping:
 
-    def __init__(self, pair: SizedPair) -> None:
+    def __init__(self, pair: SizedPair, max_difference: float) -> None:
         self.R = (pair.end - pair.start) / (pair.melody_end - pair.melody_start)
         self.T = pair.start - self.R * pair.melody_start
+        self.max_difference = max_difference
 
     def mel_to_perf(self, time: float) -> float:
         return time * self.R + self.T
@@ -354,7 +357,7 @@ class StructuralMapping:
         match_to_mel = self.perf_to_mel(match_center)
         mel_center = (pair.melody_start + pair.melody_end) / 2
         rel_diff = abs(mel_center - match_to_mel) / melody_duration
-        return (1 - rel_diff) * len(pair) * log2(len(pair))
+        return (self.max_difference - rel_diff) * len(pair) * log2(len(pair))
 
     def __call__(self, pair: SizedPair, melody_duration: float) -> float:
         return self.structure_score(pair, melody_duration)

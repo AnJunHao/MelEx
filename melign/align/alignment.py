@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Callable, overload, Literal, Iterable, Iterator, TypedDict
 from tqdm.auto import tqdm
 import warnings
+from icecream import ic
 
 from melign.data.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
 from melign.data.event import MidiEvent
@@ -138,6 +139,15 @@ def concat_matches(matches: Iterable[MatchLike]) -> list[MidiEvent]:
     return [event
             for match in matches
             for event in match.events]
+
+def filter_within(events: Iterable[MidiEvent], within: Iterable[MatchLike]) -> list[MidiEvent]:
+    output = []
+    for e in events:
+        for m in within:
+            if m.start <= e.time <= m.end:
+                output.append(e)
+                break
+    return output
 
 @overload
 def scan(
@@ -352,6 +362,10 @@ class AlignConfig:
     hop_length: int = 1
     split_melody: bool = True
     structural_align: bool = False
+    structural_max_difference: float = 1
+    melody_min_recurrence: float = 0.975
+    duration_tolerance: float = 0.2
+    structural_only: bool = False
 
 @dataclass(frozen=True, slots=True)
 class Alignment:
@@ -433,17 +447,17 @@ def align(
     local_abs_tolerance = melody.mean_diff() * config.local_tolerance
 
     total_scans = sum(len(range(0,
-                                len(melody) - config.candidate_min_length,
+                                len(m) - config.candidate_min_length,
                                 config.hop_length)) 
-                     for melody in melodies if len(melody) >= config.candidate_min_length)
+                     for m in melodies if len(m) >= config.candidate_min_length)
     
     with tqdm(total=total_scans, desc="Scanning alignments", disable=not verbose) as pbar:
-        for melody in melodies:
+        for m in melodies:
             for scan_start in range(0,
-                                    len(melody) - config.candidate_min_length,
+                                    len(m) - config.candidate_min_length,
                                     config.hop_length):
                 candidates.extend(scan(
-                    melody[scan_start:],
+                    m[scan_start:],
                     performance,
                     config.score_model,
                     config.same_key,
@@ -473,29 +487,37 @@ def align(
     if skip_wisp:
         return candidates
 
-    if config.structural_align:
+    if (config.structural_align and
+        abs(melody.duration - performance.duration) / melody.duration < config.duration_tolerance):
         if not defer_score:
             warnings.warn("defer_score should be True when structural_align is True", stacklevel=2)
         max_match = max(candidates, key=lambda x: len(x))
-        structural_mapping = StructuralMapping(max_match)
-        updated_candidates = [
+        structural_mapping = StructuralMapping(max_match, config.structural_max_difference)
+        structural_candidates = [
             candidate.update_score(structural_mapping(candidate, melody.duration))
             for candidate in candidates
         ]
-        candidates = updated_candidates
-        opt_score, opt_subset = non_crossing_weighted_bi_interval_scheduling(
-            updated_candidates, return_subset=True, verbose=False)
+        structural_score, structural_subset = non_crossing_weighted_bi_interval_scheduling(
+            structural_candidates, return_subset=True, verbose=False)
+        recurrence = sum(m.sum_miss + len(m) for m in structural_subset) / len(melody)
+        if recurrence < config.melody_min_recurrence:
+            structural_subset = None
+        elif config.structural_only:
+            concat_events = concat_matches(structural_subset)
+            return Alignment(concat_events, structural_subset, structural_score, None)
     else:
-        if defer_score:
-            scores = config.score_model(candidates)
-            updated_candidates: list[FrozenMatch] = []
-            for candidate, score in zip(candidates, scores):
-                if score >= config.candidate_min_score:
-                    updated_candidates.append(candidate.update_score(score))
-            candidates = updated_candidates
+        structural_subset = None
+        
+    if defer_score:
+        scores = config.score_model(candidates)
+        updated_candidates: list[FrozenMatch] = []
+        for candidate, score in zip(candidates, scores):
+            if score >= config.candidate_min_score:
+                updated_candidates.append(candidate.update_score(score))
+        candidates = updated_candidates
 
-        opt_score, opt_subset = weighted_interval_scheduling(
-            candidates, return_subset=True, verbose=False)
+    opt_score, opt_subset = weighted_interval_scheduling(
+        candidates, return_subset=True, verbose=False)
 
     if return_discarded_matches:
         discarded_matches = [match for match in candidates if match not in opt_subset]
@@ -503,6 +525,9 @@ def align(
         discarded_matches = None
 
     concat_events = concat_matches(opt_subset)
+    if structural_subset is not None:
+        concat_events = filter_within(concat_events, structural_subset)
+        
     return Alignment(concat_events, opt_subset, opt_score,
                     discarded_matches)
 
