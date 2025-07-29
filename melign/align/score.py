@@ -64,22 +64,22 @@ class SimpleModel(ScoreModel):
 
 class MelodicsWeights(TypedDict):
     error: float
-    velocity: bool
-    miss: bool
-    note_mean: bool
-    shadow: bool
-    between: bool
-    above_between: bool
+    velocity: float
+    miss: float
+    note_mean: float
+    shadow: float
+    between: float
+    above_between: float
 
 def get_melodics_weights() -> MelodicsWeights:
     return {
         "error": 0.5,
-        "velocity": True,
-        "miss": True,
-        "note_mean": False,
-        "shadow": True,
-        "between": False,
-        "above_between": True,
+        "velocity": 1,
+        "miss": 1,
+        "note_mean": 0,
+        "shadow": 1,
+        "between": 0,
+        "above_between": 1,
     }
 
 class MelodicsModel(ScoreModel):
@@ -106,27 +106,36 @@ class MelodicsModel(ScoreModel):
         else:
             assert self.song_stats is not None, "Song stats required, use `load_song_stats` first"
             score = len(match.events)
-            if self.weights['velocity']:
-                v = sum(event.velocity for event in match.events) / 128 / len(match.events)
-                score *= v
-            if self.weights['miss']:
-                m = (1 - match.sum_miss / len(match.events))
-                score *= m
-            if self.weights['note_mean']:
-                n = sum(event.note for event in match.events) / len(match.events) / self.song_stats['note_mean_song']
-                score *= n
-            if self.weights['shadow']:
-                s = (1 - match.sum_shadow / len(match.events))
-                score *= s
-            if self.weights['between']:
-                b = (1 - match.sum_between / len(match.events))
-                score *= b
-            if self.weights['above_between']:
-                ab = (1 - match.sum_above_between / len(match.events))
-                score *= ab
-            if self.weights['error']:
-                e = self.weights['error']*match.sum_error/self.song_stats['duration_per_event']
-                score -= e
+
+            v = sum(event.velocity for event in match.events) / 128 / len(match.events)
+            score *= v ** self.weights['velocity']
+
+            m = (1 - match.sum_miss / len(match.events))
+            if m < 0:
+                return 0
+            score *= m ** self.weights['miss']
+
+            n = sum(event.note for event in match.events) / len(match.events) / self.song_stats['note_mean_song']
+            score *= n ** self.weights['note_mean']
+
+            s = (1 - match.sum_shadow / len(match.events))
+            if s < 0:
+                return 0
+            score *= s ** self.weights['shadow']
+
+            b = (1 - match.sum_between / len(match.events))
+            if b < 0:
+                return 0
+            score *= b ** self.weights['between']
+
+            ab = (1 - match.sum_above_between / len(match.events))
+            if ab < 0:
+                return 0
+            score *= ab ** self.weights['above_between']
+
+            e = self.weights['error']*match.sum_error/self.song_stats['duration_per_event']
+            score -= e
+
             return score
 
 class RegressionModel(ScoreModel):

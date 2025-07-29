@@ -33,6 +33,7 @@ def _prepare_one_song_candidates(args: tuple[Song, int, int, int, Path]) -> int 
             hop_length=hop_length,
             candidate_min_length=min_length,
             candidate_min_score=0,
+            structural_align=False
         ),
         skip_wisp=True,
         verbose=False  # No per-song progress bars in parallel mode

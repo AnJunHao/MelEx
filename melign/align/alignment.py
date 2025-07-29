@@ -140,12 +140,18 @@ def concat_matches(matches: Iterable[MatchLike]) -> list[MidiEvent]:
             for match in matches
             for event in match.events]
 
-def filter_within(events: Iterable[MidiEvent], within: Iterable[MatchLike]) -> list[MidiEvent]:
+def filter_within[T: MidiEvent | MatchLike](
+    queries: Iterable[T],
+    within: Iterable[MatchLike]
+    ) -> list[T]:
     output = []
-    for e in events:
+    for q in queries:
         for m in within:
-            if m.start <= e.time <= m.end:
-                output.append(e)
+            if isinstance(q, MidiEvent) and m.start <= q.time <= m.end:
+                output.append(q)
+                break
+            elif isinstance(q, (FrozenMatch, Match)) and m.start <= q.start and q.end <= m.end:
+                output.append(q)
                 break
     return output
 
@@ -364,7 +370,7 @@ class AlignConfig:
     structural_align: bool = False
     structural_max_difference: float = 1
     melody_min_recurrence: float = 0.975
-    duration_tolerance: float = 0.2
+    duration_tolerance: float = 0.5
     structural_only: bool = False
 
 @dataclass(frozen=True, slots=True)
@@ -484,8 +490,6 @@ def align(
                 score=0,
                 discarded_matches=None)
 
-    if skip_wisp:
-        return candidates
 
     if (config.structural_align and
         abs(melody.duration - performance.duration) / melody.duration < config.duration_tolerance):
@@ -502,11 +506,17 @@ def align(
         recurrence = sum(m.sum_miss + len(m) for m in structural_subset) / len(melody)
         if recurrence < config.melody_min_recurrence:
             structural_subset = None
+        elif skip_wisp:
+            output = filter_within(candidates, structural_subset) # Assign to output just for type inspection
+            return output
         elif config.structural_only:
             concat_events = concat_matches(structural_subset)
             return Alignment(concat_events, structural_subset, structural_score, None)
     else:
         structural_subset = None
+
+    if skip_wisp:
+        return candidates
         
     if defer_score:
         scores = config.score_model(candidates)
@@ -525,6 +535,7 @@ def align(
         discarded_matches = None
 
     concat_events = concat_matches(opt_subset)
+
     if structural_subset is not None:
         concat_events = filter_within(concat_events, structural_subset)
         

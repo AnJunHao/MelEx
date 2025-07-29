@@ -5,13 +5,16 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm.auto import tqdm
 from collections import defaultdict
 
-from melign.align.alignment import Alignment, FrozenMatch, concat_matches
-from melign.align.score import ScoreModel
-from melign.align.dp import weighted_interval_scheduling
+from melign.align.alignment import FrozenMatch, concat_matches, filter_within
+from melign.align.score import ScoreModel, StructuralMapping
+from melign.align.dp import weighted_interval_scheduling, non_crossing_weighted_bi_interval_scheduling
 from melign.align.eval_and_vis import evaluate_melody
 from melign.api.dataset import Dataset, Song
 from melign.data.io import PathLike
 from melign.data.sequence import song_stats
+
+DURATION_TOLERANCE = 0.5
+MELODY_MIN_RECURRENCE = 0.975
 
 class Result(TypedDict):
     min_score: float
@@ -19,35 +22,58 @@ class Result(TypedDict):
     precision: float
     recall: float
 
-def _min_score_one_song(args: tuple[Song, Path, int | None, Iterable[float], ScoreModel]) -> list[Result]:
-    song, candidates_dir, min_length, search_range, score_model = args
+def _min_score_one_song(
+    args: tuple[Song, Path, int | None, Iterable[float], Iterable[ScoreModel]]
+    ) -> dict[int, list[Result]]:
+    song, candidates_dir, min_length, search_range, score_models = args
 
     candidates: list[FrozenMatch] = pickle.load(open(candidates_dir / f"{song.name}.pkl", "rb"))
 
     if min_length is not None:
         candidates = [c for c in candidates if len(c.events) >= min_length]
 
-    score_model.load_song_stats(song_stats(song.melody, song.performance))
-    scores = score_model(candidates)
+    if abs(song.melody.duration - song.performance.duration) / song.melody.duration < DURATION_TOLERANCE:
+        max_match = max(candidates, key=lambda x: len(x))
+        structural_mapping = StructuralMapping(max_match, 1)
+        structural_candidates = [
+            candidate.update_score(structural_mapping(candidate, song.melody.duration))
+            for candidate in candidates
+        ]
+        structural_score, structural_subset = non_crossing_weighted_bi_interval_scheduling(
+            structural_candidates, return_subset=True, verbose=False)
+        recurrence = sum(m.sum_miss + len(m) for m in structural_subset) / len(song.melody)
+        if recurrence < MELODY_MIN_RECURRENCE:
+            structural_subset = None
+    else:
+        structural_subset = None
 
-    print(scores[0])
+    output: dict[int, list[Result]] = dict()
 
-    results: list[Result] = []
+    for i, score_model in enumerate(score_models):
 
-    for m in search_range:
-        updated_candidates: list[FrozenMatch] = []
-        for candidate, score in zip(candidates, scores):
-            if score >= m:
-                updated_candidates.append(candidate.update_score(score))
-        opt_score, opt_subset = weighted_interval_scheduling(
-            updated_candidates, return_subset=True, verbose=False)
-        concat_events = concat_matches(opt_subset)
-        assert song.ground_truth is not None
-        result = evaluate_melody(song.ground_truth, concat_events, plot=False)
-        results.append(Result(
-            min_score=m, f1=result.f1_score, precision=result.precision, recall=result.recall))
+        score_model.load_song_stats(song_stats(song.melody, song.performance))
+        scores = score_model(candidates)
+
+        results: list[Result] = []
+
+        for m in search_range:
+            updated_candidates: list[FrozenMatch] = []
+            for candidate, score in zip(candidates, scores):
+                if score >= m:
+                    updated_candidates.append(candidate.update_score(score))
+            opt_score, opt_subset = weighted_interval_scheduling(
+                updated_candidates, return_subset=True, verbose=False)
+            concat_events = concat_matches(opt_subset)
+            if structural_subset is not None:
+                concat_events = filter_within(concat_events, structural_subset)
+            assert song.ground_truth is not None
+            result = evaluate_melody(song.ground_truth, concat_events, plot=False)
+            results.append(Result(
+                min_score=m, f1=result.f1_score, precision=result.precision, recall=result.recall))
+        
+        output[i] = results
     
-    return results
+    return output
 
 
 def search_min_score(
@@ -55,27 +81,27 @@ def search_min_score(
     candidates_dir: PathLike,
     min_length: int | None,
     search_range: Iterable[float],
-    score_model: ScoreModel,
+    score_models: Iterable[ScoreModel],
     verbose: bool = True,
     n_jobs: int = 1
-    ) -> tuple[dict[float, dict[str, float]], Result]:
+    ) -> list[Result]:
     """
     Compute min_score results for each song in the dataset, possibly in parallel.
     Returns a flat list of Result for all songs and all min_score values.
     """
     candidates_dir = Path(candidates_dir)
-    results: list[Result] = []
+    results: list[dict[int, list[Result]]] = []
     if n_jobs == 1:
         progress_bar = tqdm(dataset, desc="Min score", disable=not verbose)
         for song in progress_bar:
-            song_results = _min_score_one_song((song, candidates_dir, min_length, search_range, score_model))
-            results.extend(song_results)
+            song_results = _min_score_one_song((song, candidates_dir, min_length, search_range, score_models))
+            results.append(song_results)
         progress_bar.close()
     else:
         overall_pbar = None
         if verbose:
             overall_pbar = tqdm(total=len(dataset), desc=f"Min score (n_jobs={n_jobs})")
-        args_list = [(song, candidates_dir, min_length, search_range, score_model) for song in dataset]
+        args_list = [(song, candidates_dir, min_length, search_range, score_models) for song in dataset]
         max_workers = n_jobs if n_jobs > 0 else None
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_song = {
@@ -86,7 +112,7 @@ def search_min_score(
                 song_name = future_to_song[future]
                 try:
                     song_results = future.result()
-                    results.extend(song_results)
+                    results.append(song_results)
                     if overall_pbar:
                         overall_pbar.update(1)
                 except Exception as exc:
@@ -95,23 +121,30 @@ def search_min_score(
                         overall_pbar.update(1)
         if overall_pbar:
             overall_pbar.close()
-
-    agg_results: defaultdict[float, dict[str, float]] = defaultdict(lambda: {"f1": 0.0, "precision": 0.0, "recall": 0.0})
+    
+    # {model_idx: {min_score: {f1: ...}}}
+    agg_results: dict[int, dict[float, dict[str, float]]] = {
+        i: defaultdict(lambda: {"f1": 0.0, "precision": 0.0, "recall": 0.0})
+        for i in range(len(list(score_models)))}
 
     for r in results:
-        agg_results[r["min_score"]]["f1"] += r["f1"] / len(dataset)
-        agg_results[r["min_score"]]["precision"] += r["precision"] / len(dataset)
-        agg_results[r["min_score"]]["recall"] += r["recall"] / len(dataset)
+        for i, d in r.items():
+            for entry in d:
+                agg_results[i][entry["min_score"]]["f1"] += entry["f1"] / len(dataset)
+                agg_results[i][entry["min_score"]]["precision"] += entry["precision"] / len(dataset)
+                agg_results[i][entry["min_score"]]["recall"] += entry["recall"] / len(dataset)
 
-    max_f1_min_score = max(agg_results, key=lambda x: agg_results[x]["f1"])
+    max_f1_min_scores = [max(agg, key=lambda x: agg[x]["f1"]) for agg in agg_results.values()]
 
     # print(f"Max F1: Min score {max_f1_min_score}, F1 {agg_results[max_f1_min_score]['f1']}, Precision {agg_results[max_f1_min_score]['precision']}, Recall {agg_results[max_f1_min_score]['recall']}")
-    
-    return agg_results, Result(
-        min_score=max_f1_min_score,
-        f1=agg_results[max_f1_min_score]["f1"],
-        precision=agg_results[max_f1_min_score]["precision"],
-        recall=agg_results[max_f1_min_score]["recall"],
-    )
+    output: list[Result] = []
+    for i, ms in enumerate(max_f1_min_scores):
+        output.append(Result(
+            min_score=ms,
+            f1=agg_results[i][ms]["f1"],
+            precision=agg_results[i][ms]["precision"],
+            recall=agg_results[i][ms]["recall"],
+        ))
+    return output
     
     
