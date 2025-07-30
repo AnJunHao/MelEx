@@ -165,6 +165,7 @@ cython_debug/
 results/
 temp/
 dev_data/
+outputs/
 
 *.xls
 *.pkl

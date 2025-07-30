@@ -7,6 +7,9 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from matplotlib import pyplot as plt
 from tqdm.auto import tqdm
 import warnings
+from sklearn.linear_model import LinearRegression
+from typing import overload, Any
+import json
 
 from melign.api.dataset import Dataset
 from melign.data.io import PathLike
@@ -23,7 +26,9 @@ def concat_dataframe(dataset: Dataset, sheets_dir: PathLike, verbose: bool = Tru
         if not file.exists():
             warnings.warn(f"File {file} doesn't exist, skipping...")
             continue
-        sheet = pd.read_excel(sheets_dir / f"{song.name}.xlsx")
+        # https://pandas.pydata.org/docs/dev/whatsnew/v2.2.0.html#calamine-engine-for-read-excel
+        # https://pypi.org/project/python-calamine/
+        sheet = pd.read_excel(sheets_dir / f"{song.name}.xlsx", engine="calamine")
         sheet["name"] = song.name
         sheets.append(sheet)
     return pd.concat(sheets)
@@ -81,96 +86,174 @@ def get_regression_dataframe(
     df = prepare_features(df, song_stats_df)
     return df
 
-def train_model(
+def train_model[T: xgb.XGBRegressor | LinearRegression](
     df: pd.DataFrame,
     output_path: PathLike,
+    model: T,
     test_size: float = 0.2,
-    n_estimators: int = 1000,
-    max_depth: int = 10
-) -> None:
+) -> T:
     """
     Train a model to predict the target variable from the features.
     """
-
     print(f"Number of samples: {len(df)}")
     
     features = ['length', 'misses', 'error', 'velocity', 'duration',
        'note_mean', 'note_std', 'note_entropy', 'note_unique', 'note_change',
        'relative_velocity', 'relative_note_mean',
        'relative_duration_per_event', 'normed_note_entropy',
-       'normed_note_change', 'normed_misses']
+       'normed_note_change', 'normed_misses',
+       'sum_shadow', 'sum_between', 'sum_above_between',
+       'duration_per_event', 'note_mean_song', 'velocity_mean']
 
     X = df[features]
     y = df['target']
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size) # type: ignore
+    X_train: pd.DataFrame; X_test: pd.DataFrame; y_train: pd.Series; y_test: pd.Series
 
-    model = xgb.XGBRegressor(n_estimators=n_estimators, max_depth=max_depth)
+    # Train the model
     model.fit(X_train, y_train)
 
+    # Save model based on type
+    if isinstance(model, xgb.XGBRegressor):
+        model.save_model(output_path)
+    elif isinstance(model, LinearRegression):
+        # Save linear regression model as JSON
+        model_data = {
+            "model_type": "LinearRegression",
+            "intercept": float(model.intercept_),
+            "feature_weights": {}
+        }
+        
+        # Add feature weights
+        for feature, weight in zip(features, model.coef_):
+            model_data["feature_weights"][feature] = float(weight)
+        
+        # Save to JSON file
+        output_path = Path(output_path)
+        if output_path.suffix.lower() != '.json':
+            output_path = output_path.with_suffix('.json')
+        
+        with open(output_path, 'w') as f:
+            json.dump(model_data, f, indent=2)
+
+    # Get predictions for evaluation
     y_train_pred = model.predict(X_train)
     y_test_pred = model.predict(X_test)
 
-    train_mse = mean_squared_error(y_train, y_train_pred)
-    test_mse = mean_squared_error(y_test, y_test_pred)
-    train_r2 = r2_score(y_train, y_train_pred)
-    test_r2 = r2_score(y_test, y_test_pred)
-    train_mae = mean_absolute_error(y_train, y_train_pred)
-    test_mae = mean_absolute_error(y_test, y_test_pred)
+    # Evaluate on training data
+    print("\n=== Training Set Performance ===")
+    evaluate_model(model, X_train, y_train)
+    
+    # Evaluate on test data
+    print("\n=== Test Set Performance ===")
+    evaluate_model(model, X_test, y_test)
 
-    print("=== Model Performance ===")
-    print(f"Training R² Score: {train_r2:.4f}")
-    print(f"Testing R² Score: {test_r2:.4f}")
-    print(f"Training MSE: {train_mse:.4f}")
-    print(f"Testing MSE: {test_mse:.4f}")
-    print(f"Training MAE: {train_mae:.4f}")
-    print(f"Testing MAE: {test_mae:.4f}")
-    print(f"Training RMSE: {np.sqrt(train_mse):.4f}")
-    print(f"Testing RMSE: {np.sqrt(test_mse):.4f}")
+    return model
 
-    model.save_model(output_path)
 
+@overload
+def evaluate_model(
+    model: xgb.XGBRegressor | LinearRegression,
+    test_df: pd.DataFrame) -> None: ...
+@overload
+def evaluate_model(
+    model: xgb.XGBRegressor | LinearRegression,
+    test_X: pd.DataFrame,
+    test_y: pd.Series) -> None: ...
+@overload
+def evaluate_model(
+    test_X: pd.DataFrame,
+    test_y: pd.Series,
+    pred_y: pd.Series) -> None: ...
+def evaluate_model(*args: Any) -> None: # type: ignore
+    """
+    Evaluate model performance and create visualizations.
+    """
+    model = None
+    
+    if len(args) == 2:
+        # Case 1: model and test_df
+        model, test_df = args
+        features = ['length', 'misses', 'error', 'velocity', 'duration',
+           'note_mean', 'note_std', 'note_entropy', 'note_unique', 'note_change',
+           'relative_velocity', 'relative_note_mean',
+           'relative_duration_per_event', 'normed_note_entropy',
+           'normed_note_change', 'normed_misses',
+           'sum_shadow', 'sum_between', 'sum_above_between',
+           'duration_per_event', 'note_mean_song', 'velocity_mean']
+        test_X = test_df[features]
+        test_y = test_df['target']
+        pred_y = pd.Series(model.predict(test_X), index=test_y.index)
+    elif len(args) == 3:
+        if hasattr(args[0], 'predict'):
+            # Case 2: model, test_X, test_y
+            model, test_X, test_y = args
+            pred_y = pd.Series(model.predict(test_X), index=test_y.index)
+        else:
+            # Case 3: test_X, test_y, pred_y
+            test_X, test_y, pred_y = args
+    else:
+        raise ValueError("Invalid number of arguments")
+
+    # Calculate metrics
+    mse = mean_squared_error(test_y, pred_y)
+    r2 = r2_score(test_y, pred_y)
+    mae = mean_absolute_error(test_y, pred_y)
+    rmse = np.sqrt(mse)
+    
+    # Print metrics
+    print(f"R² Score: {r2:.4f}")
+    print(f"MSE: {mse:.4f}")
+    print(f"MAE: {mae:.4f}")
+    print(f"RMSE: {rmse:.4f}")
+    
     # Create visualizations
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-
-    # 1. Actual vs Predicted (Training)
-    axes[0, 0].scatter(y_train, y_train_pred, alpha=0.5, color='blue', s=1)
-    axes[0, 0].plot([y_train.min(), y_train.max()], [y_train.min(), y_train.max()], 'r--', lw=2) # type: ignore
-    axes[0, 0].set_xlabel('Actual (tp - fp)')
-    axes[0, 0].set_ylabel('Predicted (tp - fp)')
-    axes[0, 0].set_title(f'Training: Actual vs Predicted (R² = {train_r2:.4f})')
-    axes[0, 0].grid(True, alpha=0.3)
-
-    # 2. Actual vs Predicted (Testing)
-    axes[0, 1].scatter(y_test, y_test_pred, alpha=0.5, color='green', s=1)
-    axes[0, 1].plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2) # type: ignore
-    axes[0, 1].set_xlabel('Actual (tp - fp)')
-    axes[0, 1].set_ylabel('Predicted (tp - fp)')
-    axes[0, 1].set_title(f'Testing: Actual vs Predicted (R² = {test_r2:.4f})')
-    axes[0, 1].grid(True, alpha=0.3)
-
-    # 3. Residuals (Training)
-    train_residuals = y_train - y_train_pred
-    axes[1, 0].scatter(y_train_pred, train_residuals, alpha=0.5, color='blue', s=1)
-    axes[1, 0].axhline(y=0, color='r', linestyle='--', lw=2)
-    axes[1, 0].set_xlabel('Predicted (tp - fp)')
-    axes[1, 0].set_ylabel('Residuals')
-    axes[1, 0].set_title('Training: Residuals vs Predicted')
-    axes[1, 0].grid(True, alpha=0.3)
-
-    # 4. Residuals (Testing)
-    test_residuals = y_test - y_test_pred
-    axes[1, 1].scatter(y_test_pred, test_residuals, alpha=0.5, color='green', s=1)
-    axes[1, 1].axhline(y=0, color='r', linestyle='--', lw=2)
-    axes[1, 1].set_xlabel('Predicted (tp - fp)')
-    axes[1, 1].set_ylabel('Residuals')
-    axes[1, 1].set_title('Testing: Residuals vs Predicted')
-    axes[1, 1].grid(True, alpha=0.3)
-
+    if model is not None:
+        fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+    else:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        axes = [axes[0], axes[1], None]
+    
+    # 1. Actual vs Predicted
+    axes[0].scatter(test_y, pred_y, alpha=0.5, s=1)
+    axes[0].plot([test_y.min(), test_y.max()], [test_y.min(), test_y.max()], 'r--', lw=2)
+    axes[0].set_xlabel('Actual (tp - fp)')
+    axes[0].set_ylabel('Predicted (tp - fp)')
+    axes[0].set_title(f'Actual vs Predicted (R² = {r2:.4f})')
+    axes[0].grid(True, alpha=0.3)
+    
+    # 2. Residuals Plot
+    residuals = test_y - pred_y
+    axes[1].scatter(pred_y, residuals, alpha=0.5, s=1)
+    axes[1].axhline(y=0, color='r', linestyle='--', lw=2)
+    axes[1].set_xlabel('Predicted (tp - fp)')
+    axes[1].set_ylabel('Residuals')
+    axes[1].set_title('Residuals vs Predicted')
+    axes[1].grid(True, alpha=0.3)
+    
+    # 3. Feature Importance / Coefficients (if model is provided)
+    if model is not None and axes[2] is not None:
+        if isinstance(model, xgb.XGBRegressor):
+            # XGBoost feature importance
+            xgb.plot_importance(model, ax=axes[2])
+        elif isinstance(model, LinearRegression):
+            # Linear Regression coefficients
+            coefficients = model.coef_
+            feature_names = test_X.columns
+            coef_df = pd.DataFrame({
+                'feature': feature_names,
+                'coefficient': coefficients
+            }).sort_values('coefficient', key=abs, ascending=True)
+            
+            colors = ['red' if c < 0 else 'blue' for c in coef_df['coefficient']]
+            axes[2].barh(coef_df['feature'], coef_df['coefficient'], color=colors)
+            axes[2].set_xlabel('Coefficient')
+            axes[2].set_title('Linear Regression Coefficients')
+            axes[2].axvline(x=0, color='black', linestyle='-', linewidth=0.5)
+        
+        axes[2].grid(True, alpha=0.3)
+    
     plt.tight_layout()
-    plt.show()
-    plt.close()
-
-    xgb.plot_importance(model)
     plt.show()
     plt.close()

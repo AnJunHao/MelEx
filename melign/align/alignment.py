@@ -363,11 +363,11 @@ class AlignConfig:
     variable_tail: bool = True
     local_tolerance: float = 0.5
     miss_tolerance: int = 2
-    candidate_min_score: float = 3.5
+    candidate_min_score: float = 4
     candidate_min_length: int = 5
     hop_length: int = 1
     split_melody: bool = True
-    structural_align: bool = False
+    structural_align: bool = True
     structural_max_difference: float = 1
     melody_min_recurrence: float = 0.975
     duration_tolerance: float = 0.5
@@ -578,6 +578,8 @@ def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int,
 
 class SelfEvalResult(TypedDict):
     pred_f1: float
+    pred_precision: float
+    pred_recall: float
     above_between: float
     between: float
     error: float
@@ -590,13 +592,26 @@ def self_eval(alignment: Alignment) -> SelfEvalResult:
     error = sum(match.sum_error for match in alignment.matches) / len(alignment.events)
     miss = sum(match.sum_miss for match in alignment.matches) / len(alignment.events)
     shadow = sum(match.sum_shadow for match in alignment.matches) / len(alignment.events)
-    pred = 0.9950128655273125 \
-         - 0.6607903283221324 * between \
-         - 0.5518402627709131 * miss \
-         - 0.32216793174475333 * error \
-         - 0.74385038669203 * shadow
+    pred_f1 = 1.0052516471187187 \
+         - 0.5237980085343735 * between \
+         - 0.5730591616288301 * miss \
+         - 0.5464726773608072 * error \
+         - 0.752308438803511 * shadow
+    pred_precision = 0.9986701254937118 \
+         - 0.12164280750603358 * miss \
+         - 0.3349362405481795 * error \
+         - 0.5340878865537385 * shadow \
+         - 0.766615119773141 * above_between
+    pred_recall = 1.00715405271537 \
+         - 0.6772013197828821 * between \
+         - 1.0475273327909769 * miss \
+         - 0.7285961336990973 * error \
+         - 0.8895154044302019 * shadow
+
     return SelfEvalResult(
-        pred_f1=pred,
+        pred_f1=pred_f1,
+        pred_precision=pred_precision,
+        pred_recall=pred_recall,
         above_between=above_between,
         between=between,
         error=error,

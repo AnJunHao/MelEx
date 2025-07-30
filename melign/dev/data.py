@@ -160,6 +160,9 @@ class Entry(TypedDict):
     note_entropy: float
     note_unique: int
     note_change: int
+    sum_shadow: float
+    sum_between: float
+    sum_above_between: float
 
 class ScoreFunctions:
 
@@ -206,6 +209,18 @@ class ScoreFunctions:
     def note_change(match: MatchLike) -> int:
         return sum(match.events[i].note != match.events[i - 1].note
                    for i in range(1, len(match.events)))
+    
+    @staticmethod
+    def sum_shadow(match: MatchLike) -> int:
+        return match.sum_shadow
+
+    @staticmethod
+    def sum_between(match: MatchLike) -> int:
+        return match.sum_between
+
+    @staticmethod
+    def sum_above_between(match: MatchLike) -> int:
+        return match.sum_above_between
 
 def _score_one_song_candidates(args: tuple[Song, Path, Path, int | None, int | None]) -> None:
     """
@@ -244,7 +259,10 @@ def _score_one_song_candidates(args: tuple[Song, Path, Path, int | None, int | N
             note_std=ScoreFunctions.note_std(c),
             note_entropy=ScoreFunctions.note_entropy(c),
             note_unique=ScoreFunctions.note_unique(c),
-            note_change=ScoreFunctions.note_change(c)))
+            note_change=ScoreFunctions.note_change(c),
+            sum_shadow=ScoreFunctions.sum_shadow(c),
+            sum_between=ScoreFunctions.sum_between(c),
+            sum_above_between=ScoreFunctions.sum_above_between(c)))
 
     pd.DataFrame(data).to_excel(output_dir / f"{song.name}.xlsx")
 

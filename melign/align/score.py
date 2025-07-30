@@ -73,13 +73,13 @@ class MelodicsWeights(TypedDict):
 
 def get_melodics_weights() -> MelodicsWeights:
     return {
-        "error": 0.5,
-        "velocity": 1,
-        "miss": 1,
-        "note_mean": 0,
-        "shadow": 1,
-        "between": 0,
-        "above_between": 1,
+        "error": 0.7144612760844599,
+        "velocity": 0.7600615857281557,
+        "miss": 0.9238979987939133,
+        "note_mean": 0.4062946651493046,
+        "shadow": 0.7234911137929942,
+        "between": 0.22881185270861296,
+        "above_between": 0.6658396693136427,
     }
 
 class MelodicsModel(ScoreModel):
@@ -153,6 +153,18 @@ class RegressionModel(ScoreModel):
         rdpe = self.duration(match) / self.length(match) / self.song_stats['duration_per_event']
         return 1 / rdpe if rdpe < 1 else rdpe
 
+    def duration_per_event(self, match: MatchLike) -> float:
+        assert self.song_stats is not None, "Song stats required, use `load_song_stats` first"
+        return self.song_stats['duration_per_event']
+
+    def note_mean_song(self, match: MatchLike) -> float:
+        assert self.song_stats is not None, "Song stats required, use `load_song_stats` first"
+        return self.song_stats['note_mean_song']
+
+    def velocity_mean(self, match: MatchLike) -> float:
+        assert self.song_stats is not None, "Song stats required, use `load_song_stats` first"
+        return self.song_stats['velocity_mean']
+        
     def normed_note_entropy(self, match: MatchLike) -> float:
         note_unique = self.note_unique(match)
         return self.note_entropy(match) / np.log2(note_unique) if note_unique >= 2 else 0
@@ -207,12 +219,29 @@ class RegressionModel(ScoreModel):
         return sum(match.events[i].note != match.events[i - 1].note
                    for i in range(1, len(match.events)))
 
+    @staticmethod
+    def sum_shadow(match: MatchLike) -> int:
+        return match.sum_shadow
+
+    @staticmethod
+    def sum_between(match: MatchLike) -> int:
+        return match.sum_between
+
+    @staticmethod
+    def sum_above_between(match: MatchLike) -> int:
+        return match.sum_above_between
+
 type WeightKeys = Literal[
     'intercept',
     'length', 'misses', 'error', 'velocity', 'duration',
     'note_mean', 'note_std', 'note_entropy', 'note_unique', 'note_change',
     'relative_velocity', 'relative_note_mean', 'relative_duration_per_event',
-    'normed_note_entropy', 'normed_note_change', 'normed_misses']
+    'normed_note_entropy', 'normed_note_change', 'normed_misses',
+    'sum_shadow', 'sum_between', 'sum_above_between',
+    'duration_per_event', 'note_mean_song', 'velocity_mean']
+
+# lambda _: 1 causes error in multi-processing, since lambda functions are not picklable
+def _return_1(*args: Any, **kwargs: Any) -> Literal[1]: return 1
 
 class LinearModel(RegressionModel):
 
@@ -223,7 +252,7 @@ class LinearModel(RegressionModel):
         self.penalty = penalty
         self.song_stats = None
         self.func_map: dict[WeightKeys, Callable[[MatchLike], float]] = {
-            'intercept': lambda _: 1,
+            'intercept': _return_1,
             'length': self.length,
             'misses': self.misses,
             'error': self.error,
@@ -240,6 +269,12 @@ class LinearModel(RegressionModel):
             'normed_note_entropy': self.normed_note_entropy,
             'normed_note_change': self.normed_note_change,
             'normed_misses': self.normed_misses,
+            'sum_shadow': self.sum_shadow,
+            'sum_between': self.sum_between,
+            'sum_above_between': self.sum_above_between,
+            'duration_per_event': self.duration_per_event,
+            'note_mean_song': self.note_mean_song,
+            'velocity_mean': self.velocity_mean,
         }
 
     @overload
@@ -249,8 +284,9 @@ class LinearModel(RegressionModel):
     @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
         # Intercept is added to the sum (1 * intercept)
-        if isinstance(match, Iterable):
+        if not isinstance(match, MatchLike):
             # Penalty included in self(m)
+            assert isinstance(match, Iterable), "MatchLike or Iterable[MatchLike] expected"
             return [self(m) for m in match]
         else:
             return sum(self.func_map[key](match) * self.weights[key]
@@ -261,8 +297,10 @@ class XGBoostModel(RegressionModel):
     @override
     def __init__(self, weights: PathLike, penalty: float = 0) -> None:
         self.model = xgb.XGBRegressor()
-        self.model.load_model(weights)
         self.penalty = penalty
+        self.weights_path = weights
+
+        self._loaded = False
 
     def get_data(self, match: MatchLike) -> dict[WeightKeys, float]:
         return {
@@ -282,6 +320,12 @@ class XGBoostModel(RegressionModel):
             'normed_note_entropy': self.normed_note_entropy(match),
             'normed_note_change': self.normed_note_change(match),
             'normed_misses': self.normed_misses(match),
+            'sum_shadow': self.sum_shadow(match),
+            'sum_between': self.sum_between(match),
+            'sum_above_between': self.sum_above_between(match),
+            'duration_per_event': self.duration_per_event(match),
+            'note_mean_song': self.note_mean_song(match),
+            'velocity_mean': self.velocity_mean(match),
         }
     
     @overload
@@ -290,6 +334,9 @@ class XGBoostModel(RegressionModel):
     def __call__(self, match: MatchLike) -> float: ...
     @override
     def __call__(self, match: MatchLike | Iterable[MatchLike]) -> float | list[float]:
+        if not self._loaded:
+            self.model.load_model(self.weights_path)
+            self._loaded = True
         if isinstance(match, Iterable):
             data = [self.get_data(m) for m in match]
             df = pd.DataFrame(data)
@@ -300,12 +347,29 @@ class XGBoostModel(RegressionModel):
 
 def get_linear_model_default_weights() -> dict[WeightKeys, float]:
     return {
-        'intercept': -23.120287,
-        'relative_note_mean': 11.182220,
-        'misses': -0.261118,
-        'error': -1.348220,
-        'velocity': 0.117107,
-        'length': 1.006953,
+        "intercept": -2.0291816224385855,
+        "length": 1.0027633665138225,
+        "misses": -0.3599427609416367,
+        "error": -0.1268590765765158,
+        "velocity": 0.17367164852016936,
+        "duration": 0.040084868725715254,
+        "note_mean": 0.02250111590520345,
+        "note_std": -0.26165660183013467,
+        "note_entropy": -0.08246542565311495,
+        "note_unique": 0.2396731552731835,
+        "note_change": -0.018463914051723488,
+        "relative_velocity": -3.897044166188731,
+        "relative_note_mean": 5.769814899779317,
+        "relative_duration_per_event": 0.21429838058097359,
+        "normed_note_entropy": -0.45384049805416465,
+        "normed_note_change": 1.03388567232885,
+        "normed_misses": 0.42975142893552054,
+        "sum_shadow": -0.014238832521484569,
+        "sum_between": -0.0030532923320651354,
+        "sum_above_between": -1.0410650815088958,
+        "duration_per_event": -4.2499451939953214,
+        "note_mean_song": -0.044738772567581304,
+        "velocity_mean": -0.17244496378181765
     }
 
 def tp_fp(
