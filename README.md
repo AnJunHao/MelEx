@@ -24,7 +24,7 @@ MelEx 使用先进的对齐算法从钢琴演奏MIDI文件中识别和提取旋�
 1. 克隆仓库：
 ```bash
 git clone <repository-url>
-cd exmel
+cd MelEx
 ```
 
 2. 使用pip安装：
