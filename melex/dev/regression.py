@@ -11,9 +11,9 @@ from sklearn.linear_model import LinearRegression
 from typing import overload, Any
 import json
 
-from melign.api.dataset import Dataset
-from melign.data.io import PathLike
-from melign.data.sequence import song_stats
+from melex.api.dataset import Dataset
+from melex.data.io import PathLike
+from melex.data.sequence import song_stats
 
 def concat_dataframe(dataset: Dataset, sheets_dir: PathLike, verbose: bool = True) -> pd.DataFrame:
     """

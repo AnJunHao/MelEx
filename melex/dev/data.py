@@ -8,10 +8,10 @@ import numpy as np
 from collections import Counter
 import pandas as pd
 
-from melign.align.alignment import align, AlignConfig, FrozenMatch
-from melign.align.score import SimpleModel, tp_fp, MatchLike
-from melign.api.dataset import Dataset, Song
-from melign.data.io import PathLike
+from melex.align.alignment import align, AlignConfig, FrozenMatch
+from melex.align.score import SimpleModel, tp_fp, MatchLike
+from melex.api.dataset import Dataset, Song
+from melex.data.io import PathLike
 
 def _prepare_one_song_candidates(args: tuple[Song, int, int, int, Path]) -> int | None:
     """

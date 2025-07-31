@@ -10,12 +10,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
 from os import process_cpu_count
 
-from melign.align.alignment import AlignConfig, align, Alignment, self_eval
-from melign.data.sequence import Melody
-from melign.data.io import PathLike, extract_original_events
-from melign.align.eval_and_vis import evaluate_melody, plot_alignment
-from melign.api.dataset import Dataset, DatasetLike, Song
-from melign.api.preset import get_default_config
+from melex.align.alignment import AlignConfig, align, Alignment, self_eval
+from melex.data.sequence import Melody
+from melex.data.io import PathLike, extract_original_events
+from melex.align.eval_and_vis import evaluate_melody, plot_alignment
+from melex.api.dataset import Dataset, DatasetLike, Song
+from melex.api.preset import get_default_config
 
 def _evaluate_single_song(args: tuple[Song, AlignConfig, bool, bool, bool, bool, PathLike | None]):
     """
@@ -96,9 +96,9 @@ def _inference_single_song(args: tuple[Song, AlignConfig, bool, bool, bool, Path
 def inference_pipeline(
     dataset: DatasetLike,
     config: AlignConfig = get_default_config(),
-    save_midi: bool = False,
-    save_excel: bool = False,
-    save_plot: bool = False,
+    save_midi: bool = True,
+    save_excel: bool = True,
+    save_plot: bool = True,
     save_dir: PathLike | None = None,
     verbose: Literal[0, 1, 2] = 1,
     n_jobs: int = 0

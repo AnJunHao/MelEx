@@ -1,6 +1,6 @@
-from melign.align.score import XGBoostModel, MelodicsModel, LinearModel, get_linear_model_default_weights
-from melign.align.alignment import AlignConfig
-from melign.data.io import PathLike
+from melex.align.score import XGBoostModel, MelodicsModel, LinearModel, get_linear_model_default_weights
+from melex.align.alignment import AlignConfig
+from melex.data.io import PathLike
 
 def get_melodics_config(hop_length: int = 1) -> AlignConfig:
     return AlignConfig(

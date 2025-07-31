@@ -3,7 +3,7 @@ from typing import overload, Literal, Iterable, cast
 import mido
 from warnings import warn
 
-from melign.data.event import MidiEvent, MelEvent, EventLike
+from melex.data.event import MidiEvent, MelEvent, EventLike
 
 type PathLike = Path | str
 

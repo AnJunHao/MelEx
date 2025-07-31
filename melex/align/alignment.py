@@ -4,10 +4,10 @@ from tqdm.auto import tqdm
 import warnings
 from icecream import ic
 
-from melign.data.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
-from melign.data.event import MidiEvent
-from melign.align.dp import weighted_interval_scheduling, non_crossing_weighted_bi_interval_scheduling
-from melign.align.score import ScoreModel, MelodicsModel, StructuralMapping
+from melex.data.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
+from melex.data.event import MidiEvent
+from melex.align.dp import weighted_interval_scheduling, non_crossing_weighted_bi_interval_scheduling
+from melex.align.score import ScoreModel, MelodicsModel, StructuralMapping
 
 @dataclass
 class Match:

@@ -6,10 +6,10 @@ import xgboost as xgb
 import pandas as pd
 from math import log2
 
-from melign.data.event import MidiEvent, EventLike
-from melign.data.sequence import MelodyLike, Melody
-from melign.data.io import PathLike
-from melign.align.dp import Pair
+from melex.data.event import MidiEvent, EventLike
+from melex.data.sequence import MelodyLike, Melody
+from melex.data.io import PathLike
+from melex.align.dp import Pair
 
 @runtime_checkable
 class MatchLike(Protocol):

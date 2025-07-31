@@ -6,10 +6,10 @@ from matplotlib.lines import Line2D
 from matplotlib.figure import Figure
 from dataclasses import dataclass
 
-from melign.data.sequence import MelodyLike, Melody, PerformanceLike, Performance
-from melign.align.alignment import Alignment, MatchLike, self_eval
-from melign.data.event import MelEvent
-from melign.data.io import PathLike
+from melex.data.sequence import MelodyLike, Melody, PerformanceLike, Performance
+from melex.align.alignment import Alignment, MatchLike, self_eval
+from melex.data.event import MelEvent
+from melex.data.io import PathLike
 
 def plot_alignment(
     alignment: Alignment,

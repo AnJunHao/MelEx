@@ -5,13 +5,13 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm.auto import tqdm
 from collections import defaultdict
 
-from melign.align.alignment import FrozenMatch, concat_matches, filter_within
-from melign.align.score import ScoreModel, StructuralMapping
-from melign.align.dp import weighted_interval_scheduling, non_crossing_weighted_bi_interval_scheduling
-from melign.align.eval_and_vis import evaluate_melody
-from melign.api.dataset import Dataset, Song
-from melign.data.io import PathLike
-from melign.data.sequence import song_stats
+from melex.align.alignment import FrozenMatch, concat_matches, filter_within
+from melex.align.score import ScoreModel, StructuralMapping
+from melex.align.dp import weighted_interval_scheduling, non_crossing_weighted_bi_interval_scheduling
+from melex.align.eval_and_vis import evaluate_melody
+from melex.api.dataset import Dataset, Song
+from melex.data.io import PathLike
+from melex.data.sequence import song_stats
 
 DURATION_TOLERANCE = 0.5
 MELODY_MIN_RECURRENCE = 0.975

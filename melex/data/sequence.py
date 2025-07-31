@@ -5,8 +5,8 @@ from collections import defaultdict
 import warnings
 import statistics
 
-from melign.data.event import MelEvent, MidiEvent, EventLike
-from melign.data.io import (
+from melex.data.event import MelEvent, MidiEvent, EventLike
+from melex.data.io import (
     load_midi, load_note, PathLike,
     melody_to_midi, extract_original_events, melody_to_note
 )
@@ -216,7 +216,7 @@ class Melody:
         melody_to_note(self.events, path)
 
     def plot(self, save_path: PathLike | None = None, show_plot: bool = True, show_splits: bool = False, split_threshold: float = 16) -> None:
-        from melign.align.eval_and_vis import plot_melody
+        from melex.align.eval_and_vis import plot_melody
         plot_melody(self, save_path, show_plot, show_splits, split_threshold)
 
     def diff(self) -> list[float]:
@@ -465,7 +465,7 @@ class Performance:
         return self.global_events[nearest_idx]
 
     def plot(self, save_path: PathLike | None = None, show_plot: bool = True) -> None:
-        from melign.align.eval_and_vis import plot_performance
+        from melex.align.eval_and_vis import plot_performance
         plot_performance(self, save_path, show_plot)
 
     def between(self, from_: EventLike, to_: EventLike) -> list[MidiEvent]:

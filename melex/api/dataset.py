@@ -3,9 +3,10 @@ from typing import Any, Iterable, Iterator, TypedDict, overload
 from dataclasses import dataclass
 from tinytag import TinyTag
 from tqdm.auto import tqdm
+import warnings
 
-from melign.data.io import PathLike
-from melign.data.sequence import Melody, Performance
+from melex.data.io import PathLike
+from melex.data.sequence import Melody, Performance
 
 @dataclass(frozen=True, slots=True)
 class Song:
@@ -153,8 +154,10 @@ class Dataset:
             audio_path = None
 
         if self.truncate_performance:
-            assert audio_path is not None, f"Audio file is required to truncate performance for {song_name}"
-            performance = self._truncate_performance(performance, audio_path)
+            if audio_path is None:  
+                warnings.warn(f"Audio file not found for {song_name}, skipping performance truncation")
+            else:
+                performance = self._truncate_performance(performance, audio_path)
         
         song = Song(song_name, melody, performance, performance_path, ground_truth, baseline, audio_path)
         
@@ -189,8 +192,7 @@ class Dataset:
             song_name = song_dir.name
             if (
                 self._get_file_path(song_dir, song_name, self.config["melody_ext"]) is None or
-                self._get_file_path(song_dir, song_name, self.config["performance_ext"]) is None or
-                (self.truncate_performance and self._get_file_path(song_dir, song_name, self.config["audio_ext"]) is None)
+                self._get_file_path(song_dir, song_name, self.config["performance_ext"]) is None
             ):
                 return False
         return True
