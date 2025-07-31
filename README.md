@@ -1,6 +1,8 @@
 # MelEx - 旋律提取
 
-MelEx 是一个用于从钢琴演奏MIDI文件中进行旋律提取的Python库。它将参考旋律与钢琴转录对齐，从复杂的钢琴演奏中提取原始旋律。
+MelEx 是一个用于从钢琴演奏MIDI文件中进行旋律提取的Python库。它将参考旋律与钢琴转录对齐，从复杂的钢琴演奏中提取原始旋律，并为提取结果打分。MelEx系统相较前人系统有显著的性能提升。
+
+![MelEx](D:\code\exmel\README.assets\MelEx.png)
 
 ## 介绍
 
@@ -135,8 +137,8 @@ songs_of_interest = dataset[["暗号(周杰伦)", "平凡之路(朴树)", "无�
 melodies, evaluation_df = inference_pipeline(songs_of_interest)
 
 # 按名称获取单首歌曲
-single_song = dataset["无限(周深)"]
-melodies, evaluation_df = inference_pipeline([single_song])
+single_song = dataset[["无限(周深)"]]
+melodies, evaluation_df = inference_pipeline(single_song)
 
 # 按索引获取单首歌曲
 first_song = dataset[0]
