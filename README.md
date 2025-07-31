@@ -2,7 +2,7 @@
 
 MelEx 是一个用于从钢琴演奏MIDI文件中进行旋律提取的Python库。它将参考旋律与钢琴转录对齐，从复杂的钢琴演奏中提取原始旋律，并为提取结果打分。MelEx系统相较前人系统有显著的性能提升。
 
-![MelEx](D:\code\exmel\README.assets\MelEx.png)
+![MelEx](./README.assets/MelEx.png)
 
 ## 介绍
 
