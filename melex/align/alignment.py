@@ -605,6 +605,8 @@ def melody_over_performance(melody: MelodyLike, performance: PerformanceLike) ->
         performance = Performance(performance)
     if performance.duration == 0:
         return 0
+    if len(melody) == 0:
+        return 0
     return sum(m.duration for m in melody.split()) / performance.duration
 
 class SelfEvalResult(TypedDict):
