@@ -370,7 +370,7 @@ def plot_alignment(
                    alignment_title, show_matches=True, ground_truth_eval=ground_truth_eval_data)
     
     # Draw discarded matches in a minimal way
-    if alignment.discarded_matches:
+    if alignment.metadata["discarded_matches"] is not None:
         # Preprocess discarded matches to merge overlapping ones into chunks
         def merge_overlapping_discards(discarded_matches):
             if not discarded_matches:
@@ -396,7 +396,7 @@ def plot_alignment(
             chunks.append(current_chunk)
             return chunks
         
-        discarded_chunks = merge_overlapping_discards(alignment.discarded_matches)
+        discarded_chunks = merge_overlapping_discards(alignment.metadata["discarded_matches"])
         
         for i, chunk in enumerate(discarded_chunks):
             # Calculate chunk boundaries
@@ -536,7 +536,7 @@ def plot_alignment(
     title = f'Melody Alignment Visualization'
     if performance_events:
         title += f' (with Performance)'
-    title += f'\nMatches: {len(alignment.matches)}, Score: {alignment.score:.2f}, '
+    title += f'\nMatches: {len(alignment.matches)}, '
     title += f'Duration: {time_max - time_min:.1f}s'
     fig.suptitle(title, fontsize=14, fontweight='bold', y=0.95)
     
@@ -558,7 +558,7 @@ def plot_alignment(
             )
         
         # Add discarded matches if present
-        if alignment.discarded_matches:
+        if alignment.metadata["discarded_matches"] is not None:
             legend_elements.append(
                 Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.5, label='Discarded Chunks')
             )
@@ -573,7 +573,7 @@ def plot_alignment(
         )
         
         # Add discarded matches if present
-        if alignment.discarded_matches:
+        if alignment.metadata["discarded_matches"] is not None:
             legend_elements.append(
                 Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.5, label='Discarded Chunks')
             )
@@ -585,7 +585,7 @@ def plot_alignment(
         )
         
         # Add discarded matches if present
-        if alignment.discarded_matches:
+        if alignment.metadata["discarded_matches"] is not None:
             legend_elements.append(
                 Line2D([0], [0], color='gray', lw=1, linestyle=':', alpha=0.5, label='Discarded Chunks')
             )
@@ -615,7 +615,6 @@ def plot_alignment(
     
     stats_text += f"Alignment Metrics:\n"
     stats_text += f"Matches: {len(alignment.matches)}\n"
-    stats_text += f"Score: {alignment.score:.3f}\n"
 
     alignment_eval = self_eval(alignment)
     stats_text += f"Pred F1: {alignment_eval['pred_f1']:.3f}\n"

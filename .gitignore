@@ -166,6 +166,7 @@ results/
 temp/
 dev_data/
 outputs/
+dataset_infer/
 
 *.xls
 *.pkl

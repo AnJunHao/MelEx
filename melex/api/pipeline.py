@@ -219,6 +219,8 @@ def inference_pipeline(
     evals = []
     for name, alignment in result.items():
         entry: dict = {'name': name}
+        entry.update(alignment.metadata)
+        del entry["discarded_matches"]
         entry.update(self_eval(alignment))
         evals.append(entry)
 

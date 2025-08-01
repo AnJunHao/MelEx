@@ -63,6 +63,7 @@ class Dataset:
         self.truncate_performance = truncate_performance
         self.enable_cache = enable_cache
         self._cache: dict[str, Song] = {}
+        self._no_audio_warned = False
         
         if isinstance(source, Dataset):
             self.song_dirs = [d for d in source.song_dirs]
@@ -155,7 +156,9 @@ class Dataset:
 
         if self.truncate_performance:
             if audio_path is None:  
-                warnings.warn(f"Audio file not found for {song_name}, skipping performance truncation")
+                if not self._no_audio_warned:
+                    warnings.warn(f"Audio file not found for {song_name}, skipping performance truncation")
+                    self._no_audio_warned = True
             else:
                 performance = self._truncate_performance(performance, audio_path)
         

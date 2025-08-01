@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from typing import Callable, overload, Literal, Iterable, Iterator, TypedDict
 from tqdm.auto import tqdm
 import warnings
-from icecream import ic
 
 from melex.data.sequence import Melody, MelodyLike, Performance, PerformanceLike, song_stats
 from melex.data.event import MidiEvent
@@ -373,23 +372,21 @@ class AlignConfig:
     duration_tolerance: float = 0.5
     structural_only: bool = False
 
+class AlignmentMetadata(TypedDict):
+    alignment_over_performance: float
+    melody_over_performance: float
+    recurrence: float
+    discarded_matches: list[FrozenMatch] | None
+
 @dataclass(frozen=True, slots=True)
 class Alignment:
     events: list[MidiEvent]
     matches: list[FrozenMatch]
-    score: float
-    discarded_matches: list[FrozenMatch] | None = None
+    metadata: AlignmentMetadata
 
     def __repr__(self) -> str:
-        if self.discarded_matches is None:  
-            return f"Alignment(events=[...({len(self.events)} events)...], " \
-                    f"matches=[...({len(self.matches)} matches)...], " \
-                    f"score={self.score}, "
-        else:
-            return f"Alignment(events=[...({len(self.events)} events)...], " \
-                    f"matches=[...({len(self.matches)} matches)...], " \
-                    f"score={self.score}, " \
-                    f"discarded_matches=[...({len(self.discarded_matches)} discarded matches)...])"
+        return f"Alignment(events=[...({len(self.events)} events)...], " \
+                    f"matches=[...({len(self.matches)} matches)...])"
 
     def __len__(self) -> int:
         return len(self.events)
@@ -457,6 +454,7 @@ def align(
                                 config.hop_length)) 
                      for m in melodies if len(m) >= config.candidate_min_length)
     
+    #################### Scanning Alignments ####################
     with tqdm(total=total_scans, desc="Scanning alignments", disable=not verbose) as pbar:
         for m in melodies:
             for scan_start in range(0,
@@ -482,42 +480,59 @@ def align(
         if return_discarded_matches:
             return Alignment(
                 events=[], matches=[],
-                score=0,
-                discarded_matches=[])
+                metadata={
+                    "discarded_matches": [],
+                    "alignment_over_performance": 0,
+                    "melody_over_performance": melody_over_performance(melody, performance),
+                    "recurrence": 0
+                })
         else:
             return Alignment(
                 events=[], matches=[],
-                score=0,
-                discarded_matches=None)
+                metadata={
+                    "discarded_matches": None,
+                    "alignment_over_performance": 0,
+                    "melody_over_performance": melody_over_performance(melody, performance),
+                    "recurrence": 0
+                })
 
-
-    if (config.structural_align and
-        abs(melody.duration - performance.duration) / melody.duration < config.duration_tolerance):
-        if not defer_score:
-            warnings.warn("defer_score should be True when structural_align is True", stacklevel=2)
-        max_match = max(candidates, key=lambda x: len(x))
-        structural_mapping = StructuralMapping(max_match, config.structural_max_difference)
-        structural_candidates = [
-            candidate.update_score(structural_mapping(candidate, melody.duration))
-            for candidate in candidates
-        ]
-        structural_score, structural_subset = non_crossing_weighted_bi_interval_scheduling(
-            structural_candidates, return_subset=True, verbose=False)
-        recurrence = sum(m.sum_miss + len(m) for m in structural_subset) / len(melody)
-        if recurrence < config.melody_min_recurrence:
-            structural_subset = None
-        elif skip_wisp:
-            output = filter_within(candidates, structural_subset) # Assign to output just for type inspection
-            return output
-        elif config.structural_only:
-            concat_events = concat_matches(structural_subset)
-            return Alignment(concat_events, structural_subset, structural_score, None)
+    #################### Structural Alignment ####################
+    if not defer_score:
+        warnings.warn("defer_score should be True when structural_align is True", stacklevel=2)
+    max_match = max(candidates, key=lambda x: len(x))
+    structural_mapping = StructuralMapping(max_match, config.structural_max_difference)
+    structural_candidates = [
+        candidate.update_score(structural_mapping(candidate, melody.duration))
+        for candidate in candidates
+    ]
+    _, structural_subset = non_crossing_weighted_bi_interval_scheduling(
+        structural_candidates, return_subset=True, verbose=False)
+    recurrence = sum(m.sum_miss + len(m) for m in structural_subset) / len(melody)
+    if recurrence < config.melody_min_recurrence:
+        structural_subset = None
+    elif skip_wisp:
+        output = filter_within(candidates, structural_subset) # Assign to output just for type inspection
+        return output
+    elif config.structural_only:
+        concat_events = concat_matches(structural_subset)
+        return Alignment(concat_events, structural_subset, {
+            "discarded_matches": None,
+            "alignment_over_performance": melody_over_performance(concat_events, performance),
+            "melody_over_performance": melody_over_performance(melody, performance),
+            "recurrence": recurrence
+        })
     else:
+        pass
+
+    #################### Reject Structural Alignment ####################
+    if (not config.structural_align or
+        abs(melody.duration - performance.duration) / melody.duration > config.duration_tolerance):
         structural_subset = None
 
     if skip_wisp:
         return candidates
-        
+    
+    #################### Score Evaluation ####################
     if defer_score:
         scores = config.score_model(candidates)
         updated_candidates: list[FrozenMatch] = []
@@ -526,6 +541,7 @@ def align(
                 updated_candidates.append(candidate.update_score(score))
         candidates = updated_candidates
 
+    #################### WISP ####################
     opt_score, opt_subset = weighted_interval_scheduling(
         candidates, return_subset=True, verbose=False)
 
@@ -536,11 +552,17 @@ def align(
 
     concat_events = concat_matches(opt_subset)
 
+    #################### Apply Structural Constraint ####################
     if structural_subset is not None:
         concat_events = filter_within(concat_events, structural_subset)
         
-    return Alignment(concat_events, opt_subset, opt_score,
-                    discarded_matches)
+    return Alignment(
+        concat_events, opt_subset, {
+            "discarded_matches": discarded_matches,
+            "alignment_over_performance": melody_over_performance(concat_events, performance),
+            "melody_over_performance": melody_over_performance(melody, performance),
+            "recurrence": recurrence
+        })
 
 def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int, int]:
     """
@@ -576,6 +598,15 @@ def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int,
             break
     return s_, b_, ab_
 
+def melody_over_performance(melody: MelodyLike, performance: PerformanceLike) -> float:
+    if not isinstance(melody, Melody):
+        melody = Melody(melody)
+    if not isinstance(performance, Performance):
+        performance = Performance(performance)
+    if performance.duration == 0:
+        return 0
+    return sum(m.duration for m in melody.split()) / performance.duration
+
 class SelfEvalResult(TypedDict):
     pred_f1: float
     pred_precision: float
@@ -587,6 +618,19 @@ class SelfEvalResult(TypedDict):
     shadow: float
 
 def self_eval(alignment: Alignment) -> SelfEvalResult:
+
+    if len(alignment.events) == 0:
+        return SelfEvalResult(
+            pred_f1=0,
+            pred_precision=0,
+            pred_recall=0,
+            above_between=0,
+            between=0,
+            error=0,
+            miss=0,
+            shadow=0
+        )
+
     above_between = sum(match.sum_above_between for match in alignment.matches) / len(alignment.events)
     between = sum(match.sum_between for match in alignment.matches) / len(alignment.events)
     error = sum(match.sum_error for match in alignment.matches) / len(alignment.events)
