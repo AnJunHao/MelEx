@@ -16,6 +16,7 @@ from melex.data.io import PathLike, extract_original_events
 from melex.align.eval_and_vis import evaluate_melody, plot_alignment
 from melex.api.dataset import Dataset, DatasetLike, Song
 from melex.api.preset import get_default_config
+from melex.api.pretty_xlsx import format_dataframe_to_excel
 
 def _evaluate_single_song(args: tuple[Song, AlignConfig, bool, bool, bool, bool, PathLike | None]):
     """
@@ -154,7 +155,8 @@ def inference_pipeline(
                 extract_original_events(
                     result[song.name].events,
                     song.performance_path,
-                    save_dir / f"{song.name}.mid")
+                    save_dir / f"{song.name}.mid",
+                    no_overlap=True)
             if save_plot:
                 assert isinstance(save_dir, Path)
                 plot_alignment(result[song.name], song.melody, song.performance, 
@@ -228,7 +230,7 @@ def inference_pipeline(
 
     if save_excel:
         assert isinstance(save_dir, Path)
-        df.to_excel(save_dir / "evaluation.xlsx", index=False)
+        format_dataframe_to_excel(df, save_dir / "evaluation.xlsx")
 
     return {name: Melody(alignment) for name, alignment in result.items()}, df
 

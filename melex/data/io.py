@@ -172,7 +172,8 @@ def extract_original_events(
     melody: Iterable[EventLike] | PathLike,
     original_midi: PathLike,
     output_path: PathLike,
-    time_tolerance: float = 0.001,
+    time_tolerance: float = 0.01,
+    no_overlap: bool = True,
 ) -> None:
     """
     Extract original MIDI events from a MIDI file based on an extracted melody.
@@ -185,6 +186,8 @@ def extract_original_events(
         melody: A Melody object or list of events representing the extracted melody
         original_midi: Path to the original MIDI file
         output_path: Path where to save the extracted MIDI file
+        time_tolerance: Tolerance for matching melody events to original MIDI events
+        no_overlap: If True, ensures no two events overlap by adjusting end times
     """
     # Convert to list of events
     if isinstance(melody, (Path, str)):
@@ -274,6 +277,53 @@ def extract_original_events(
     
     # Sort selected events by time
     selected_events.sort(key=lambda x: x['time'])
+    
+    # Post-process to prevent overlapping events if no_overlap is True
+    if no_overlap:
+        # Group events into note_on/note_off pairs
+        note_pairs = []
+        i = 0
+        while i < len(selected_events):
+            if selected_events[i]['type'] == 'note_on' and selected_events[i]['velocity'] > 0:
+                # Find the corresponding note_off event
+                note_on = selected_events[i]
+                note_off = None
+                for j in range(i + 1, len(selected_events)):
+                    if (selected_events[j]['note'] == note_on['note'] and
+                        ((selected_events[j]['type'] == 'note_off') or 
+                         (selected_events[j]['type'] == 'note_on' and selected_events[j]['velocity'] == 0))):
+                        note_off = selected_events[j]
+                        break
+                
+                if note_off:
+                    note_pairs.append((note_on, note_off))
+            i += 1
+        
+        # Sort note pairs by start time
+        note_pairs.sort(key=lambda pair: pair[0]['time'])
+        
+        # Adjust end times to prevent overlaps
+        for i in range(len(note_pairs) - 1):
+            current_note_off = note_pairs[i][1]
+            next_note_on = note_pairs[i + 1][0]
+            
+            # If current note ends after the next note starts, adjust the end time
+            if current_note_off['time'] > next_note_on['time']:
+                # Update the time and time_ticks of the note_off event
+                current_note_off['time'] = next_note_on['time']
+                # Convert back to ticks (approximate conversion)
+                tempo = 500000  # Use the same default tempo
+                ticks_per_beat = new_mid.ticks_per_beat
+                current_note_off['time_ticks'] = int(current_note_off['time'] * ticks_per_beat * 1000000 / tempo)
+        
+        # Rebuild the selected_events list from the adjusted pairs
+        selected_events = []
+        for note_on, note_off in note_pairs:
+            selected_events.append(note_on)
+            selected_events.append(note_off)
+        
+        # Sort again by time after adjustments
+        selected_events.sort(key=lambda x: x['time'])
     
     # Convert selected events to MIDI messages and add to track
     current_time_ticks = 0

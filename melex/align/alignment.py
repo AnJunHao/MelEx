@@ -375,7 +375,7 @@ class AlignConfig:
 class AlignmentMetadata(TypedDict):
     alignment_over_performance: float
     melody_over_performance: float
-    recurrence: float
+    structural_recurrence: float
     discarded_matches: list[FrozenMatch] | None
 
 @dataclass(frozen=True, slots=True)
@@ -484,7 +484,7 @@ def align(
                     "discarded_matches": [],
                     "alignment_over_performance": 0,
                     "melody_over_performance": melody_over_performance(melody, performance),
-                    "recurrence": 0
+                    "structural_recurrence": 0
                 })
         else:
             return Alignment(
@@ -493,7 +493,7 @@ def align(
                     "discarded_matches": None,
                     "alignment_over_performance": 0,
                     "melody_over_performance": melody_over_performance(melody, performance),
-                    "recurrence": 0
+                    "structural_recurrence": 0
                 })
 
     #################### Structural Alignment ####################
@@ -519,7 +519,7 @@ def align(
             "discarded_matches": None,
             "alignment_over_performance": melody_over_performance(concat_events, performance),
             "melody_over_performance": melody_over_performance(melody, performance),
-            "recurrence": recurrence
+            "structural_recurrence": recurrence
         })
     else:
         pass
@@ -561,7 +561,7 @@ def align(
             "discarded_matches": discarded_matches,
             "alignment_over_performance": melody_over_performance(concat_events, performance),
             "melody_over_performance": melody_over_performance(melody, performance),
-            "recurrence": recurrence
+            "structural_recurrence": recurrence
         })
 
 def s_b_ab(events: list[MidiEvent], performance: Performance) -> tuple[int, int, int]:
