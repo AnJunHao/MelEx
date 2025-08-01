@@ -311,10 +311,8 @@ def extract_original_events(
             if current_note_off['time'] > next_note_on['time']:
                 # Update the time and time_ticks of the note_off event
                 current_note_off['time'] = next_note_on['time']
-                # Convert back to ticks (approximate conversion)
-                tempo = 500000  # Use the same default tempo
-                ticks_per_beat = new_mid.ticks_per_beat
-                current_note_off['time_ticks'] = int(current_note_off['time'] * ticks_per_beat * 1000000 / tempo)
+                # Use the next note's time_ticks directly to maintain consistency
+                current_note_off['time_ticks'] = next_note_on['time_ticks']
         
         # Rebuild the selected_events list from the adjusted pairs
         selected_events = []
@@ -322,8 +320,8 @@ def extract_original_events(
             selected_events.append(note_on)
             selected_events.append(note_off)
         
-        # Sort again by time after adjustments
-        selected_events.sort(key=lambda x: x['time'])
+        # Sort again by time_ticks after adjustments (this is what matters for MIDI delta time)
+        selected_events.sort(key=lambda x: x['time_ticks'])
     
     # Convert selected events to MIDI messages and add to track
     current_time_ticks = 0
@@ -331,6 +329,10 @@ def extract_original_events(
     for event in selected_events:
         # Calculate delta time in ticks
         delta_ticks = event['time_ticks'] - current_time_ticks
+        
+        # Ensure non-negative delta time
+        if delta_ticks < 0:
+            delta_ticks = 0
         
         # Create the message with the delta time
         msg = mido.Message(

@@ -25,7 +25,7 @@ def get_melodics_config(hop_length: int = 1) -> AlignConfig:
         split_melody=True,
         structural_align=True,
         structural_max_difference=1,
-        melody_min_recurrence=0.975,
+        melody_min_recurrence=0.97,
         duration_tolerance=0.5,
         structural_only=False)
 
@@ -44,7 +44,7 @@ def get_xgboost_config(model_path: PathLike, hop_length: int = 1) -> AlignConfig
         split_melody=True,
         structural_align=True,
         structural_max_difference=1,
-        melody_min_recurrence=0.975,
+        melody_min_recurrence=0.97,
         duration_tolerance=0.5,
         structural_only=False)
 
@@ -63,7 +63,7 @@ def get_linear_config(hop_length: int = 1) -> AlignConfig:
         split_melody=True,
         structural_align=True,
         structural_max_difference=1,
-        melody_min_recurrence=0.975,
+        melody_min_recurrence=0.97,
         duration_tolerance=0.5,
         structural_only=False)
 

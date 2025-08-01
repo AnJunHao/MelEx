@@ -14,7 +14,7 @@ from melex.data.io import PathLike
 from melex.data.sequence import song_stats
 
 DURATION_TOLERANCE = 0.5
-MELODY_MIN_RECURRENCE = 0.975
+MELODY_MIN_RECURRENCE = 0.97
 
 class Result(TypedDict):
     min_score: float

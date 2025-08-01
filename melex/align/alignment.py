@@ -368,7 +368,7 @@ class AlignConfig:
     split_melody: bool = True
     structural_align: bool = True
     structural_max_difference: float = 1
-    melody_min_recurrence: float = 0.975
+    melody_min_recurrence: float = 0.97
     duration_tolerance: float = 0.5
     structural_only: bool = False
 
